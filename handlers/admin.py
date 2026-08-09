@@ -11,11 +11,13 @@ import inspect
 from states import AddProduct, EditProduct, DeleteProduct, ImportExcel
 from keyboards import (
     admin_menu, main_menu, cancel_kb, skip_kb,
-    confirm_delete_kb, product_actions_kb, back_to_admin_kb, edit_fields_kb
+    confirm_delete_kb, product_actions_kb, back_to_admin_kb, edit_fields_kb,
+    confirm_wipe_kb
 )
 from database import (
     add_product, update_product, delete_product, get_product,
-    get_all_products, count_products, build_product_name, get_product_by_name
+    get_all_products, count_products, build_product_name, get_product_by_name,
+    clear_products
 )
 from utils import is_admin, format_product, format_price
 
@@ -96,7 +98,7 @@ async def add_start(message: Message, state: FSMContext):
 @router.message(AddProduct.photo, F.text == "❌ انصراف")
 async def add_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("افزودن کالا لغو شد.", reply_markup=admin_menu())
+    await message.answer("افزودن کالا لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
 
 
 @router.message(AddProduct.category)
@@ -298,7 +300,7 @@ async def edit_start(message: Message, state: FSMContext):
 @router.message(EditProduct.waiting_id, F.text == "❌ انصراف")
 async def edit_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("لغو شد.", reply_markup=admin_menu())
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
 
 
 @router.message(EditProduct.waiting_id)
@@ -342,6 +344,7 @@ async def inline_edit_start(callback: CallbackQuery, state: FSMContext):
 async def cancel_edit_cb(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("ویرایش لغو شد.")
+    await callback.message.answer("منوی اصلی:", reply_markup=main_menu(is_admin(callback.from_user)))
     await callback.answer()
 
 
@@ -375,7 +378,7 @@ async def edit_field_chosen(callback: CallbackQuery, state: FSMContext):
 @router.message(EditProduct.value, F.text == "❌ انصراف")
 async def edit_value_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("لغو شد.", reply_markup=admin_menu())
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
 
 
 @router.message(EditProduct.value, F.photo)
@@ -442,7 +445,7 @@ async def delete_start(message: Message, state: FSMContext):
 @router.message(DeleteProduct.waiting_id, F.text == "❌ انصراف")
 async def delete_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("لغو شد.", reply_markup=admin_menu())
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
 
 
 @router.message(DeleteProduct.waiting_id)
@@ -476,6 +479,7 @@ async def confirm_delete(callback: CallbackQuery):
 @router.callback_query(F.data == "cancel_del")
 async def cancel_delete(callback: CallbackQuery):
     await callback.message.edit_text("حذف لغو شد.")
+    await callback.message.answer("منوی اصلی:", reply_markup=main_menu(is_admin(callback.from_user)))
     await callback.answer()
 
 
@@ -510,6 +514,34 @@ async def list_products(message: Message):
     await message.answer("\n".join(lines), reply_markup=admin_menu())
 
 
+# ---------- پاک کردن کامل دیتابیس ----------
+@router.message(F.text == "🧨 پاک کردن کامل دیتابیس")
+@admin_only
+async def wipe_start(message: Message):
+    total = await count_products()
+    await message.answer(
+        f"⚠️ این عملیات همه‌ی {total} کالای ثبت‌شده را برای همیشه پاک می‌کند و "
+        "غیرقابل بازگشت است.\nمطمئن هستید؟",
+        reply_markup=confirm_wipe_kb()
+    )
+
+
+@router.callback_query(F.data == "confirm_wipe")
+@admin_only
+async def confirm_wipe(callback: CallbackQuery):
+    await clear_products()
+    await callback.message.edit_text("✅ کل دیتابیس پاک شد. می‌توانید از صفر کالا اضافه کنید.")
+    await callback.message.answer("منوی مدیریت:", reply_markup=admin_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_wipe")
+async def cancel_wipe(callback: CallbackQuery):
+    await callback.message.edit_text("لغو شد؛ چیزی پاک نشد.")
+    await callback.message.answer("منوی مدیریت:", reply_markup=admin_menu())
+    await callback.answer()
+
+
 # ---------- ایمپورت اکسل ----------
 @router.message(F.text == "📥 ایمپورت اکسل")
 @admin_only
@@ -529,7 +561,7 @@ async def import_start(message: Message, state: FSMContext):
 @router.message(ImportExcel.waiting_file, F.text == "❌ انصراف")
 async def import_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("لغو شد.", reply_markup=admin_menu())
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
 
 
 @router.message(ImportExcel.waiting_file, F.document)
