@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>اسکنر بارکد</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--tg-theme-bg-color, #ffffff);
+      color: var(--tg-theme-text-color, #000000);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+    h2 {
+      margin-bottom: 12px;
+      font-size: 1.3rem;
+    }
+    #reader {
+      width: 100%;
+      max-width: 400px;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .info {
+      margin-top: 16px;
+      text-align: center;
+      font-size: 0.95rem;
+      opacity: 0.85;
+    }
+    .result {
+      margin-top: 16px;
+      padding: 12px 16px;
+      background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+      border-radius: 10px;
+      font-size: 1.1rem;
+      word-break: break-all;
+      display: none;
+    }
+    .btn {
+      margin-top: 16px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 10px;
+      background: var(--tg-theme-button-color, #2481cc);
+      color: var(--tg-theme-button-text-color, #ffffff);
+      font-size: 1rem;
+      cursor: pointer;
+      width: 100%;
+      max-width: 400px;
+    }
+    .btn:active { opacity: 0.85; }
+    .error {
+      color: #e53935;
+      margin-top: 12px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h2>📷 اسکن بارکد کالا</h2>
+  <div id="reader"></div>
+  <div class="info">دوربین را روی بارکد کالا بگیرید</div>
+  <div id="result" class="result"></div>
+  <div id="error" class="error"></div>
+  <button id="sendBtn" class="btn" style="display:none;">ارسال به بات</button>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    let lastCode = null;
+    const resultEl = document.getElementById("result");
+    const errorEl = document.getElementById("error");
+    const sendBtn = document.getElementById("sendBtn");
+
+    function onScanSuccess(decodedText, decodedResult) {
+      if (decodedText === lastCode) return;
+      lastCode = decodedText;
+
+      // توقف اسکنر
+      html5QrCode.stop().then(() => {
+        resultEl.style.display = "block";
+        resultEl.innerText = "بارکد: " + decodedText;
+        sendBtn.style.display = "block";
+        sendBtn.onclick = () => {
+          tg.sendData(decodedText);
+          tg.close();
+        };
+        // لرزش موفقیت
+        try { tg.HapticFeedback.notificationOccurred("success"); } catch(e) {}
+      }).catch(err => {
+        console.error(err);
+      });
+    }
+
+    function onScanFailure(error) {
+      // نادیده گرفتن خطاهای مکرر اسکن
+    }
+
+    const html5QrCode = new Html5Qrcode("reader");
+    const config = {
+      fps: 10,
+      qrbox: { width: 250, height: 150 },
+      aspectRatio: 1.0,
+      formatsToSupport: [
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.QR_CODE,
+        Html5QrcodeSupportedFormats.ITF,
+      ]
+    };
+
+    Html5Qrcode.getCameras().then(cameras => {
+      if (cameras && cameras.length) {
+        // ترجیح دوربین پشت
+        let cameraId = cameras[0].id;
+        for (let cam of cameras) {
+          if (cam.label && (cam.label.toLowerCase().includes("back") || cam.label.toLowerCase().includes("rear"))) {
+            cameraId = cam.id;
+            break;
+          }
+        }
+        html5QrCode.start(cameraId, config, onScanSuccess, onScanFailure)
+          .catch(err => {
+            errorEl.innerText = "خطا در باز کردن دوربین: " + err;
+          });
+      } else {
+        errorEl.innerText = "دوربینی پیدا نشد.";
+      }
+    }).catch(err => {
+      errorEl.innerText = "دسترسی به دوربین ممکن نیست. لطفاً مجوز بدهید.";
+    });
+  </script>
+</body>
+</html>
