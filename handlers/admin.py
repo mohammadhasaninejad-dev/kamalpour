@@ -6,6 +6,8 @@ import openpyxl
 import tempfile
 import os
 
+import inspect
+
 from states import AddProduct, EditProduct, DeleteProduct, ImportExcel
 from keyboards import (
     admin_menu, main_menu, cancel_kb, skip_kb,
@@ -27,8 +29,17 @@ def admin_only(handler):
     جداگانه و دستی is_admin را چک می‌کرد؛ اگر هندلر جدیدی اضافه می‌شد و این چک
     فراموش می‌شد یک حفره‌ی امنیتی ایجاد می‌کرد. حالا همه‌جا از همین دکوریتور
     استفاده می‌شود.
+
+    نکته‌ی فنی: چون wrapper خودش **kwargs دارد، aiogram همه‌ی چیزهایی که در دسترس
+    است (state, bot, dispatcher, ...) را به آن پاس می‌دهد. اگر همه‌ی این‌ها را
+    بی‌قید و شرط به handler اصلی فوروارد کنیم، برای هندلرهایی که فقط message
+    یا (message, state) می‌گیرند خطای "unexpected keyword argument" می‌دهد.
+    برای همین با inspect فقط پارامترهایی که خودِ handler واقعاً در امضایش
+    اعلام کرده فیلتر و فوروارد می‌شوند.
     """
-    async def wrapper(event, *args, **kwargs):
+    handler_params = inspect.signature(handler).parameters
+
+    async def wrapper(event, **kwargs):
         user = event.from_user if hasattr(event, "from_user") else None
         if not is_admin(user):
             if isinstance(event, Message):
@@ -36,7 +47,8 @@ def admin_only(handler):
             elif isinstance(event, CallbackQuery):
                 await event.answer("⛔ دسترسی فقط برای ادمین.", show_alert=True)
             return
-        return await handler(event, *args, **kwargs)
+        accepted = {k: v for k, v in kwargs.items() if k in handler_params}
+        return await handler(event, **accepted)
     return wrapper
 
 
