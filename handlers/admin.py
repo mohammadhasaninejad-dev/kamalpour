@@ -12,14 +12,17 @@ from states import AddProduct, EditProduct, DeleteProduct, ImportExcel
 from keyboards import (
     admin_menu, main_menu, cancel_kb, skip_kb,
     confirm_delete_kb, product_actions_kb, back_to_admin_kb, edit_fields_kb,
-    confirm_wipe_kb
+    confirm_wipe_kb, browse_categories_kb, browse_attrs_kb, browse_products_nav_kb
 )
 from database import (
     add_product, update_product, delete_product, get_product,
-    get_all_products, count_products, build_product_name, get_product_by_name,
-    clear_products
+    count_products, build_product_name, get_product_by_name,
+    get_product_by_excel_id, clear_products,
+    get_distinct_categories, get_distinct_attr1,
+    get_products_by_category_attr1, count_products_by_category_attr1
 )
 from utils import is_admin, format_product, format_price
+from config import PAGE_SIZE
 
 router = Router()
 
@@ -499,19 +502,152 @@ async def inline_delete(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- لیست کالاها ----------
+# ---------- لیست کالاها (مرور بر اساس دسته و خصوصیت ۱) ----------
 @router.message(F.text == "📋 لیست کالاها")
 @admin_only
-async def list_products(message: Message):
-    total = await count_products()
-    products = await get_all_products(offset=0, limit=15)
-    if not products:
+async def list_products(message: Message, state: FSMContext):
+    categories = await get_distinct_categories()
+    if not categories:
         await message.answer("هنوز کالایی ثبت نشده.")
         return
-    lines = [f"📋 آخرین کالاها (از {total} کالا):\n"]
+    await state.update_data(browse_categories=categories)
+    await message.answer(
+        f"📋 {len(categories)} دسته موجود است. یک دسته را انتخاب کنید:",
+        reply_markup=browse_categories_kb(categories, page=0)
+    )
+
+
+@router.callback_query(F.data.startswith("browsecatpage:"))
+@admin_only
+async def browse_category_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    categories = data.get("browse_categories") or []
+    await callback.message.edit_reply_markup(reply_markup=browse_categories_kb(categories, page=page))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("browsecat:"))
+@admin_only
+async def browse_category_select(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    categories = data.get("browse_categories") or []
+    if idx < 0 or idx >= len(categories):
+        await callback.answer("این لیست منقضی شده؛ دوباره روی «📋 لیست کالاها» بزنید.", show_alert=True)
+        return
+
+    category = categories[idx]
+    attrs = await get_distinct_attr1(category)
+    await state.update_data(browse_category=category, browse_attrs=attrs)
+
+    if not attrs:
+        # این دسته خصوصیت ۱ ندارد؛ مستقیم کالاها نمایش داده می‌شوند
+        await state.update_data(browse_attr1=None)
+        await callback.answer()
+        await send_browse_products(callback.message, state, callback.from_user, page=0)
+        return
+
+    await callback.message.edit_text(
+        f"🏷 دسته: {category}\nخصوصیت ۱ را انتخاب کنید:",
+        reply_markup=browse_attrs_kb(attrs, page=0)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("browseattrpage:"))
+@admin_only
+async def browse_attr_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    attrs = data.get("browse_attrs") or []
+    await callback.message.edit_reply_markup(reply_markup=browse_attrs_kb(attrs, page=page))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("browseattr:"))
+@admin_only
+async def browse_attr_select(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    attrs = data.get("browse_attrs") or []
+    category = data.get("browse_category")
+    if not category or idx < 0 or idx >= len(attrs):
+        await callback.answer("این لیست منقضی شده؛ دوباره روی «📋 لیست کالاها» بزنید.", show_alert=True)
+        return
+
+    attr1 = attrs[idx]
+    await state.update_data(browse_attr1=attr1)
+    await callback.answer()
+    await send_browse_products(callback.message, state, callback.from_user, page=0)
+
+
+@router.callback_query(F.data == "browseback:cat")
+@admin_only
+async def browse_back_to_categories(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    categories = data.get("browse_categories")
+    if not categories:
+        categories = await get_distinct_categories()
+        await state.update_data(browse_categories=categories)
+    await callback.message.edit_text(
+        f"📋 {len(categories)} دسته موجود است. یک دسته را انتخاب کنید:",
+        reply_markup=browse_categories_kb(categories, page=0)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "browseback:attr")
+@admin_only
+async def browse_back_to_attrs(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    category = data.get("browse_category") or ""
+    attrs = data.get("browse_attrs") or []
+    await callback.message.edit_text(
+        f"🏷 دسته: {category}\nخصوصیت ۱ را انتخاب کنید:",
+        reply_markup=browse_attrs_kb(attrs, page=0)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("browsepage:"))
+@admin_only
+async def browse_products_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":", 1)[1])
+    await callback.answer()
+    await send_browse_products(callback.message, state, callback.from_user, page=page)
+
+
+async def send_browse_products(message: Message, state: FSMContext, user, page: int):
+    """نمایش کالاهای یک دسته (و در صورت وجود، یک خصوصیت ۱) به‌صورت صفحه‌بندی‌شده"""
+    data = await state.get_data()
+    category = data.get("browse_category")
+    attr1 = data.get("browse_attr1")
+    has_attr = "browse_attrs" in data and bool(data.get("browse_attrs"))
+
+    if not category:
+        await message.answer("دسته انتخاب نشده؛ دوباره روی «📋 لیست کالاها» بزنید.")
+        return
+
+    total = await count_products_by_category_attr1(category, attr1)
+    products = await get_products_by_category_attr1(category, attr1, offset=page * PAGE_SIZE, limit=PAGE_SIZE)
+    admin = is_admin(user)
+
+    title = f"🏷 {category}" + (f" | {attr1}" if attr1 else "")
+    await message.answer(f"{title}\n{total} کالا (صفحه {page + 1}):")
+
     for p in products:
-        lines.append(f"🆔 {p['id']} | {p.get('name') or '—'}")
-    await message.answer("\n".join(lines), reply_markup=admin_menu())
+        text = format_product(p)
+        kb = product_actions_kb(p["id"], admin)
+        if p.get("photo_file_id"):
+            await message.answer_photo(p["photo_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+    await message.answer(
+        "ناوبری:",
+        reply_markup=browse_products_nav_kb(page, total, PAGE_SIZE, has_attr=has_attr and attr1 is not None)
+    )
 
 
 # ---------- پاک کردن کامل دیتابیس ----------
@@ -549,10 +685,12 @@ async def import_start(message: Message, state: FSMContext):
     await state.set_state(ImportExcel.waiting_file)
     await message.answer(
         "فایل اکسل را ارسال کنید.\n"
-        "✅ این عملیات جایگزین‌کننده (destructive) نیست: کالاهایی که از قبل با همین "
-        "دسته/خصوصیت/برند وجود داشته باشند فقط قیمت‌شان به‌روزرسانی می‌شود و بارکد، "
-        "موجودی و عکسی که قبلاً برایشان ثبت کرده‌اید دست‌نخورده می‌ماند. کالاهای جدیدِ "
-        "اکسل هم اضافه می‌شوند.\n"
+        "✅ این عملیات جایگزین‌کننده (destructive) نیست: کالاهایی که از قبل وجود داشته "
+        "باشند فقط قیمت‌شان به‌روزرسانی می‌شود و بارکد، موجودی و عکسی که قبلاً برایشان "
+        "ثبت کرده‌اید دست‌نخورده می‌ماند. کالاهای جدیدِ اکسل هم اضافه می‌شوند.\n"
+        "🆔 تشخیص کالای تکراری بر اساس ستون «شناسه» انجام می‌شود (اگر این ستون در فایل "
+        "باشد)، نه بر اساس نام کالا؛ بنابراین حتی اگر چند کالا دسته/خصوصیت/برند یکسانی "
+        "داشته باشند، درست تشخیص داده می‌شوند و حذف نمی‌شوند.\n"
         "ستون‌ها باید مطابق نمونه قبلی باشند.",
         reply_markup=cancel_kb()
     )
@@ -599,7 +737,9 @@ async def import_excel(message: Message, state: FSMContext):
             if not val:
                 continue
             v = str(val).strip()
-            if "دسته" in v:
+            if "شناسه" in v:
+                col_map["excel_id"] = c
+            elif "دسته" in v:
                 col_map["category"] = c
             elif "خصوصیت 1" in v or "خصوصیت۱" in v:
                 col_map["attr1"] = c
@@ -663,7 +803,11 @@ async def import_excel(message: Message, state: FSMContext):
                 except Exception:
                     return None
 
+            excel_id_val = get("excel_id")
+            excel_id_val = str(excel_id_val).strip() if excel_id_val is not None else None
+
             data = {
+                "excel_id": excel_id_val,
                 "category": str(get("category")).strip() if get("category") else None,
                 "attr1": str(get("attr1")).strip() if get("attr1") else None,
                 "attr2": str(get("attr2")).strip() if get("attr2") else None,
@@ -678,11 +822,19 @@ async def import_excel(message: Message, state: FSMContext):
                 "seller_code": str(get("seller_code")).strip() if get("seller_code") else None,
             }
 
-            name = build_product_name(
-                data["category"], data["attr1"], data["attr2"],
-                data["attr3"], data["attr4"], data["attr5"], data["brand"]
-            )
-            existing = await get_product_by_name(name)
+            # تشخیص کالای تکراری: در درجه‌ی اول بر اساس ستون «شناسه» اکسل (منحصربه‌فرد
+            # برای هر ردیف)، چون تطبیق بر اساس نام باعث می‌شد کالاهای مختلفی که دسته/
+            # خصوصیت/برند یکسانی دارند و در نتیجه نام ساخته‌شده‌ی یکسانی پیدا می‌کنند
+            # به‌اشتباه یک کالا در نظر گرفته شوند و حذف/بازنویسی شوند. اگر ستون شناسه در
+            # فایل نبود (فایل‌های قدیمی)، به‌صورت پشتیبان همان تطبیق بر اساس نام انجام می‌شود.
+            if excel_id_val:
+                existing = await get_product_by_excel_id(excel_id_val)
+            else:
+                name = build_product_name(
+                    data["category"], data["attr1"], data["attr2"],
+                    data["attr3"], data["attr4"], data["attr5"], data["brand"]
+                )
+                existing = await get_product_by_name(name)
 
             # بارکد و موجودی: اگر ستونش در اکسل بود همان مقدار اکسل استفاده می‌شود،
             # وگرنه مقدار قبلیِ ثبت‌شده در ربات (اگر کالا از قبل وجود داشت) حفظ می‌شود.
