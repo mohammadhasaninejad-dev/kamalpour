@@ -294,8 +294,8 @@ FIELD_FA_NAMES = {
 async def edit_start(message: Message, state: FSMContext):
     await state.set_state(EditProduct.waiting_id)
     await message.answer(
-        "شناسه (ID) کالایی که می‌خواهید ویرایش کنید را وارد کنید:\n"
-        "(از لیست کالاها یا استعلام می‌توانید ID را ببینید)",
+        "شناسه کالایی که می‌خواهید ویرایش کنید را وارد کنید:\n"
+        "(همان شناسه‌ای که زیر مشخصات هر کالا در لیست کالاها یا استعلام نمایش داده می‌شود)",
         reply_markup=cancel_kb()
     )
 
@@ -308,15 +308,15 @@ async def edit_cancel(message: Message, state: FSMContext):
 
 @router.message(EditProduct.waiting_id)
 async def edit_id(message: Message, state: FSMContext):
-    try:
-        pid = int(message.text.strip())
-    except Exception:
-        await message.answer("شناسه عددی وارد کنید.")
+    excel_id = message.text.strip()
+    if not excel_id:
+        await message.answer("شناسه را وارد کنید.")
         return
-    product = await get_product(pid)
+    product = await get_product_by_excel_id(excel_id)
     if not product:
         await message.answer("کالایی با این شناسه پیدا نشد.")
         return
+    pid = product["id"]
     await state.clear()
     await message.answer(format_product(product), parse_mode="HTML")
     await message.answer(
@@ -453,12 +453,11 @@ async def delete_cancel(message: Message, state: FSMContext):
 
 @router.message(DeleteProduct.waiting_id)
 async def delete_id(message: Message, state: FSMContext):
-    try:
-        pid = int(message.text.strip())
-    except Exception:
-        await message.answer("شناسه عددی وارد کنید.")
+    excel_id = message.text.strip()
+    if not excel_id:
+        await message.answer("شناسه را وارد کنید.")
         return
-    product = await get_product(pid)
+    product = await get_product_by_excel_id(excel_id)
     if not product:
         await message.answer("کالایی پیدا نشد.")
         return
@@ -466,7 +465,7 @@ async def delete_id(message: Message, state: FSMContext):
     await message.answer(
         f"آیا مطمئن هستید که می‌خواهید این کالا را حذف کنید؟\n\n{format_product(product)}",
         parse_mode="HTML",
-        reply_markup=confirm_delete_kb(pid)
+        reply_markup=confirm_delete_kb(product["id"])
     )
 
 
