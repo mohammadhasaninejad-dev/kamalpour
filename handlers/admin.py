@@ -13,7 +13,7 @@ from keyboards import (
 )
 from database import (
     add_product, update_product, delete_product, get_product,
-    get_all_products, count_products, clear_products, build_product_name
+    get_all_products, count_products, build_product_name, get_product_by_name
 )
 from utils import is_admin, format_product, format_price
 
@@ -21,6 +21,13 @@ router = Router()
 
 
 def admin_only(handler):
+    """
+    دکوریتور یکپارچه برای گیت‌کردن هندلرهای ادمین.
+    قبلاً این تابع تعریف شده بود ولی هیچ‌جا استفاده نمی‌شد و به‌جایش هر هندلر
+    جداگانه و دستی is_admin را چک می‌کرد؛ اگر هندلر جدیدی اضافه می‌شد و این چک
+    فراموش می‌شد یک حفره‌ی امنیتی ایجاد می‌کرد. حالا همه‌جا از همین دکوریتور
+    استفاده می‌شود.
+    """
     async def wrapper(event, *args, **kwargs):
         user = event.from_user if hasattr(event, "from_user") else None
         if not is_admin(user):
@@ -35,10 +42,8 @@ def admin_only(handler):
 
 # ---------- منوی مدیریت ----------
 @router.message(F.text == "📦 مدیریت کالا")
+@admin_only
 async def admin_panel(message: Message, state: FSMContext):
-    if not is_admin(message.from_user):
-        await message.answer("⛔ دسترسی ندارید.")
-        return
     await state.clear()
     total = await count_products()
     await message.answer(
@@ -48,18 +53,16 @@ async def admin_panel(message: Message, state: FSMContext):
 
 
 @router.message(F.text == "🔙 بازگشت به مدیریت کالا")
+@admin_only
 async def back_to_admin(message: Message, state: FSMContext):
-    if not is_admin(message.from_user):
-        return
     await state.clear()
     await message.answer("پنل مدیریت:", reply_markup=admin_menu())
 
 
 # ---------- افزودن کالا ----------
 @router.message(F.text == "➕ افزودن کالا")
+@admin_only
 async def add_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user):
-        return
     await state.set_state(AddProduct.category)
     await message.answer("دسته کالا را وارد کنید (مثال: دفتر):", reply_markup=cancel_kb())
 
@@ -270,9 +273,8 @@ FIELD_FA_NAMES = {
 
 
 @router.message(F.text == "✏️ ویرایش کالا")
+@admin_only
 async def edit_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user):
-        return
     await state.set_state(EditProduct.waiting_id)
     await message.answer(
         "شناسه (ID) کالایی که می‌خواهید ویرایش کنید را وارد کنید:\n"
@@ -307,11 +309,9 @@ async def edit_id(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("edit:"))
+@admin_only
 async def inline_edit_start(callback: CallbackQuery, state: FSMContext):
     """وقتی از دکمه ویرایش زیر محصول زده می‌شود"""
-    if not is_admin(callback.from_user):
-        await callback.answer("دسترسی ندارید", show_alert=True)
-        return
     pid = int(callback.data.split(":")[1])
     product = await get_product(pid)
     if not product:
@@ -334,10 +334,8 @@ async def cancel_edit_cb(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("efield:"))
+@admin_only
 async def edit_field_chosen(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user):
-        await callback.answer("دسترسی ندارید", show_alert=True)
-        return
     try:
         _, pid_str, field = callback.data.split(":", 2)
         pid = int(pid_str)
@@ -423,9 +421,8 @@ async def edit_value(message: Message, state: FSMContext):
 
 # ---------- حذف کالا ----------
 @router.message(F.text == "🗑 حذف کالا")
+@admin_only
 async def delete_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user):
-        return
     await state.set_state(DeleteProduct.waiting_id)
     await message.answer("شناسه کالایی که می‌خواهید حذف کنید را وارد کنید:", reply_markup=cancel_kb())
 
@@ -456,10 +453,8 @@ async def delete_id(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("confirm_del:"))
+@admin_only
 async def confirm_delete(callback: CallbackQuery):
-    if not is_admin(callback.from_user):
-        await callback.answer("دسترسی ندارید", show_alert=True)
-        return
     pid = int(callback.data.split(":")[1])
     await delete_product(pid)
     await callback.message.edit_text("✅ کالا حذف شد.")
@@ -473,10 +468,8 @@ async def cancel_delete(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("del:"))
+@admin_only
 async def inline_delete(callback: CallbackQuery):
-    if not is_admin(callback.from_user):
-        await callback.answer("دسترسی ندارید", show_alert=True)
-        return
     pid = int(callback.data.split(":")[1])
     product = await get_product(pid)
     if not product:
@@ -492,9 +485,8 @@ async def inline_delete(callback: CallbackQuery):
 
 # ---------- لیست کالاها ----------
 @router.message(F.text == "📋 لیست کالاها")
+@admin_only
 async def list_products(message: Message):
-    if not is_admin(message.from_user):
-        return
     total = await count_products()
     products = await get_all_products(offset=0, limit=15)
     if not products:
@@ -508,13 +500,15 @@ async def list_products(message: Message):
 
 # ---------- ایمپورت اکسل ----------
 @router.message(F.text == "📥 ایمپورت اکسل")
+@admin_only
 async def import_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user):
-        return
     await state.set_state(ImportExcel.waiting_file)
     await message.answer(
         "فایل اکسل را ارسال کنید.\n"
-        "⚠️ توجه: کالاهای فعلی پاک می‌شوند و داده‌های جدید جایگزین می‌شوند.\n"
+        "✅ این عملیات جایگزین‌کننده (destructive) نیست: کالاهایی که از قبل با همین "
+        "دسته/خصوصیت/برند وجود داشته باشند فقط قیمت‌شان به‌روزرسانی می‌شود و بارکد، "
+        "موجودی و عکسی که قبلاً برایشان ثبت کرده‌اید دست‌نخورده می‌ماند. کالاهای جدیدِ "
+        "اکسل هم اضافه می‌شوند.\n"
         "ستون‌ها باید مطابق نمونه قبلی باشند.",
         reply_markup=cancel_kb()
     )
@@ -585,13 +579,16 @@ async def import_excel(message: Message, state: FSMContext):
                 col_map["seller_name"] = c
             elif "کد فروشنده" in v:
                 col_map["seller_code"] = c
+            elif "بارکد" in v:
+                col_map["barcode"] = c
+            elif "موجودی" in v:
+                col_map["stock"] = c
 
         if "category" not in col_map:
             await message.answer("ستون دسته پیدا نشد.")
             return
 
-        await clear_products()
-        count = 0
+        added, updated = 0, 0
         for row in range(header_row + 1, ws.max_row + 1):
             cat = ws.cell(row, col_map["category"]).value
             if not cat or not str(cat).strip():
@@ -607,11 +604,20 @@ async def import_excel(message: Message, state: FSMContext):
             def get_num(col_key):
                 v = get(col_key)
                 if v is None:
-                    return 0
+                    return None
                 try:
                     return float(v)
                 except Exception:
-                    return 0
+                    return None
+
+            def get_int(col_key):
+                v = get(col_key)
+                if v is None:
+                    return None
+                try:
+                    return int(float(v))
+                except Exception:
+                    return None
 
             data = {
                 "category": str(get("category")).strip() if get("category") else None,
@@ -621,21 +627,42 @@ async def import_excel(message: Message, state: FSMContext):
                 "attr4": str(get("attr4")).strip() if get("attr4") else None,
                 "attr5": str(get("attr5")).strip() if get("attr5") else None,
                 "brand": str(get("brand")).strip() if get("brand") else None,
-                "purchase_price": get_num("purchase_price"),
-                "sale_price": get_num("sale_price"),
-                "wholesale_price": get_num("wholesale_price"),
-                "stock": 0,
-                "barcode": None,
+                "purchase_price": get_num("purchase_price") or 0,
+                "sale_price": get_num("sale_price") or 0,
+                "wholesale_price": get_num("wholesale_price") or 0,
                 "seller_name": str(get("seller_name")).strip() if get("seller_name") else None,
                 "seller_code": str(get("seller_code")).strip() if get("seller_code") else None,
-                "photo_file_id": None,
             }
-            await add_product(data)
-            count += 1
+
+            name = build_product_name(
+                data["category"], data["attr1"], data["attr2"],
+                data["attr3"], data["attr4"], data["attr5"], data["brand"]
+            )
+            existing = await get_product_by_name(name)
+
+            # بارکد و موجودی: اگر ستونش در اکسل بود همان مقدار اکسل استفاده می‌شود،
+            # وگرنه مقدار قبلیِ ثبت‌شده در ربات (اگر کالا از قبل وجود داشت) حفظ می‌شود.
+            excel_barcode = get("barcode")
+            excel_stock = get_int("stock")
+
+            if existing:
+                data["barcode"] = excel_barcode if excel_barcode is not None else existing.get("barcode")
+                data["stock"] = excel_stock if excel_stock is not None else existing.get("stock")
+                data["photo_file_id"] = existing.get("photo_file_id")
+                await update_product(existing["id"], data)
+                updated += 1
+            else:
+                data["barcode"] = excel_barcode
+                data["stock"] = excel_stock or 0
+                data["photo_file_id"] = None
+                await add_product(data)
+                added += 1
 
         await state.clear()
         await message.answer(
-            f"✅ ایمپورت با موفقیت انجام شد.\nتعداد کالاهای وارد شده: {count}",
+            "✅ ایمپورت با موفقیت انجام شد.\n"
+            f"➕ کالای جدید: {added}\n"
+            f"🔄 کالای به‌روزشده (با حفظ بارکد/موجودی/عکس قبلی): {updated}",
             reply_markup=admin_menu()
         )
     except Exception as e:

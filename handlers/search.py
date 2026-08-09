@@ -59,17 +59,22 @@ async def text_search_query(message: Message, state: FSMContext):
     if total > PAGE_SIZE:
         await message.answer(
             "صفحات بیشتر:",
-            reply_markup=pagination_kb(query, 0, total, PAGE_SIZE)
+            reply_markup=pagination_kb(0, total, PAGE_SIZE)
         )
 
 
 @router.callback_query(F.data.startswith("page:"))
-async def pagination_handler(callback: CallbackQuery):
+async def pagination_handler(callback: CallbackQuery, state: FSMContext):
     try:
-        _, query, page_str = callback.data.split(":", 2)
-        page = int(page_str)
+        page = int(callback.data.split(":", 1)[1])
     except Exception:
         await callback.answer("خطا در صفحه‌بندی")
+        return
+
+    data = await state.get_data()
+    query = data.get("search_query")
+    if not query:
+        await callback.answer("عبارت جستجو منقضی شده، دوباره جستجو کنید.", show_alert=True)
         return
 
     total = await count_search(query)
@@ -87,7 +92,7 @@ async def pagination_handler(callback: CallbackQuery):
 
     await callback.message.answer(
         "ناوبری:",
-        reply_markup=pagination_kb(query, page, total, PAGE_SIZE)
+        reply_markup=pagination_kb(page, total, PAGE_SIZE)
     )
     await callback.answer()
 
