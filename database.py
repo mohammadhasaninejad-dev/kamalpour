@@ -5,6 +5,8 @@ from config import DATABASE_PATH
 async def init_db():
     os.makedirs(os.path.dirname(DATABASE_PATH) or ".", exist_ok=True)
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        # WAL باعث می‌شود خواندن و نوشتن هم‌زمان (مثلاً جستجو حین ثبت کالا) قفل نشوند
+        await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,6 +114,15 @@ async def get_product(product_id: int):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM products WHERE id=?", (product_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def get_product_by_name(name: str):
+    """برای تطبیق سطرهای اکسل با کالاهای موجود، تا هنگام ایمپورت بارکد/موجودی/عکس پاک نشود"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM products WHERE name=?", (name,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
 

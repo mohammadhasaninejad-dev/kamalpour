@@ -18,6 +18,7 @@ def main_menu(is_admin: bool = False):
     ]
     if is_admin:
         buttons.append([KeyboardButton(text="📦 مدیریت کالا")])
+    buttons.append([KeyboardButton(text="🆔 آیدی من")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -59,13 +60,18 @@ def product_actions_kb(product_id: int, is_admin: bool = False):
     return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
 
-def pagination_kb(query: str, page: int, total: int, page_size: int = 10):
+def pagination_kb(page: int, total: int, page_size: int = 10):
+    """
+    توجه: متن جستجو دیگر داخل callback_data قرار نمی‌گیرد چون تلگرام محدودیت ۶۴ بایتی
+    دارد و یک عبارت فارسی چندکلمه‌ای به‌راحتی از این حد رد می‌شود. متن جستجو در state
+    ذخیره می‌شود و اینجا فقط شماره صفحه لازم است.
+    """
     buttons = []
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"page:{query}:{page-1}"))
+        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"page:{page-1}"))
     if (page + 1) * page_size < total:
-        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"page:{query}:{page+1}"))
+        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"page:{page+1}"))
     if nav:
         buttons.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
