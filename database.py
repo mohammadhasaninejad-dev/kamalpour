@@ -39,6 +39,12 @@ async def init_db():
         if "excel_id" not in existing_cols:
             await db.execute("ALTER TABLE products ADD COLUMN excel_id TEXT")
 
+        # پرکردن شناسه برای کالاهای قدیمی‌ای که قبل از این تغییر بدون excel_id ثبت شده‌اند
+        await db.execute("""
+            UPDATE products SET excel_id = 'M-' || id
+            WHERE excel_id IS NULL OR TRIM(excel_id) = ''
+        """)
+
         await db.execute("CREATE INDEX IF NOT EXISTS idx_name ON products(name)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_barcode ON products(barcode)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_category ON products(category)")
@@ -81,8 +87,18 @@ async def add_product(data: dict) -> int:
             data.get("seller_code"),
             data.get("photo_file_id"),
         ))
+        new_id = cursor.lastrowid
+
+        # کالاهایی که از اکسل نیامده‌اند (مثلاً با «➕ افزودن کالا» دستی ثبت شده‌اند) ستون
+        # excel_id خالی دارند. چون این ستون تنها شناسه‌ای است که به کاربر نمایش داده
+        # می‌شود و برای ویرایش/حذف با آن جست‌وجو می‌کنیم، باید همیشه پر باشد؛ پیشوند
+        # "M-" هم تضمین می‌کند با هیچ شناسه‌ی عددیِ اکسل تداخل پیدا نکند.
+        if not data.get("excel_id"):
+            fallback_id = f"M-{new_id}"
+            await db.execute("UPDATE products SET excel_id=? WHERE id=?", (fallback_id, new_id))
+
         await db.commit()
-        return cursor.lastrowid
+        return new_id
 
 
 async def update_product(product_id: int, data: dict):

@@ -23,8 +23,9 @@ def format_price(value) -> str:
 
 def format_product(product: dict, short: bool = False) -> str:
     name = product.get("name") or "بدون نام"
+    excel_id = product.get("excel_id") or "—"
     if short:
-        return f"🆔 {product['id']} | {name}"
+        return f"🆔 {excel_id} | {name}"
 
     lines = [
         f"📦 <b>{name}</b>",
@@ -47,6 +48,6 @@ def format_product(product: dict, short: bool = False) -> str:
         f"📊 موجودی: {product.get('stock') or 0}",
         f"🔢 بارکد: {product.get('barcode') or '—'}",
         f"👤 فروشنده: {product.get('seller_name') or '—'} ({product.get('seller_code') or '—'})",
-        f"🆔 شناسه: {product['id']}",
+        f"🆔 شناسه: {excel_id}",
     ])
     return "\n".join(lines)
