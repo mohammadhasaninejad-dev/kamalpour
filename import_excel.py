@@ -29,7 +29,9 @@ async def main():
         if not val:
             continue
         v = str(val).strip()
-        if "دسته" in v:
+        if "شناسه" in v:
+            col_map["excel_id"] = c
+        elif "دسته" in v:
             col_map["category"] = c
         elif "خصوصیت 1" in v:
             col_map["attr1"] = c
@@ -80,7 +82,9 @@ async def main():
             except Exception:
                 return 0
 
+        excel_id_val = get("excel_id")
         data = {
+            "excel_id": str(excel_id_val).strip() if excel_id_val is not None else None,
             "category": str(get("category")).strip() if get("category") else None,
             "attr1": str(get("attr1")).strip() if get("attr1") else None,
             "attr2": str(get("attr2")).strip() if get("attr2") else None,
