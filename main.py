@@ -19,6 +19,7 @@ async def on_startup(bot: Bot):
     logger.info("Database initialized")
     me = await bot.get_me()
     logger.info(f"Bot started: @{me.username}")
+    logger.info(f"WEBAPP_URL = {WEBAPP_URL}")
 
 
 def create_webapp_app():
