@@ -18,7 +18,6 @@ def main_menu(is_admin: bool = False):
     ]
     if is_admin:
         buttons.append([KeyboardButton(text="📦 مدیریت کالا")])
-    buttons.append([KeyboardButton(text="🆔 آیدی من")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -27,7 +26,8 @@ def admin_menu():
         keyboard=[
             [KeyboardButton(text="➕ افزودن کالا"), KeyboardButton(text="✏️ ویرایش کالا")],
             [KeyboardButton(text="🗑 حذف کالا"), KeyboardButton(text="📋 لیست کالاها")],
-            [KeyboardButton(text="📥 ایمپورت اکسل"), KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
+            [KeyboardButton(text="📥 ایمپورت اکسل"), KeyboardButton(text="🧨 پاک کردن کامل دیتابیس")],
+            [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
         ],
         resize_keyboard=True
     )
@@ -82,6 +82,16 @@ def confirm_delete_kb(product_id: int):
         [
             InlineKeyboardButton(text="✅ بله، حذف شود", callback_data=f"confirm_del:{product_id}"),
             InlineKeyboardButton(text="❌ خیر", callback_data="cancel_del"),
+        ]
+    ])
+
+
+def confirm_wipe_kb():
+    """تأیید دو مرحله‌ای برای پاک کردن کامل دیتابیس - چون این عملیات غیرقابل بازگشت است"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🧨 بله، همه چیز پاک شود", callback_data="confirm_wipe"),
+            InlineKeyboardButton(text="❌ نه، انصراف", callback_data="cancel_wipe"),
         ]
     ])
 
