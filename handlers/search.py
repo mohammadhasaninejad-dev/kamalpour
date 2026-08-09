@@ -1,11 +1,10 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ContentType
 from aiogram.fsm.context import FSMContext
-from aiogram.filters import StateFilter
 
 from states import TextSearch
-from keyboards import main_menu, barcode_webapp_kb, pagination_kb, product_actions_kb, cancel_kb
-from database import search_products, count_search, get_product_by_barcode, get_product
+from keyboards import main_menu, pagination_kb, product_actions_kb, cancel_kb
+from database import search_products, count_search, get_product_by_barcode
 from utils import is_admin, format_product
 from config import PAGE_SIZE
 
@@ -93,28 +92,19 @@ async def pagination_handler(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- استعلام تصویری (Mini App) ----------
-@router.message(F.text == "📷 استعلام تصویری")
-async def image_search_start(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        "برای اسکن بارکد روی دکمه زیر بزنید.\n"
-        "دوربین باز می‌شود و بارکد را اسکن کنید.",
-        reply_markup=barcode_webapp_kb()
-    )
-
-
+# ---------- دریافت بارکد از مینی‌اپ ----------
 @router.message(F.content_type == ContentType.WEB_APP_DATA)
 async def webapp_data_handler(message: Message):
     """دریافت بارکد اسکن‌شده از مینی‌اپ"""
     data = message.web_app_data.data
     barcode = data.strip() if data else ""
+    admin = is_admin(message.from_user)
+
     if not barcode:
-        await message.answer("بارکدی دریافت نشد.")
+        await message.answer("بارکدی دریافت نشد.", reply_markup=main_menu(admin))
         return
 
     product = await get_product_by_barcode(barcode)
-    admin = is_admin(message.from_user)
 
     if not product:
         await message.answer(

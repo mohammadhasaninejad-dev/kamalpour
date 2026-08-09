@@ -9,7 +9,7 @@ import os
 from states import AddProduct, EditProduct, DeleteProduct, ImportExcel
 from keyboards import (
     admin_menu, main_menu, cancel_kb, skip_kb,
-    confirm_delete_kb, product_actions_kb, back_to_admin_kb
+    confirm_delete_kb, product_actions_kb, back_to_admin_kb, edit_fields_kb
 )
 from database import (
     add_product, update_product, delete_product, get_product,
@@ -250,6 +250,25 @@ async def add_photo_skip(message: Message, state: FSMContext):
 
 
 # ---------- ویرایش کالا ----------
+FIELD_FA_NAMES = {
+    "category": "دسته",
+    "attr1": "خصوصیت ۱",
+    "attr2": "خصوصیت ۲",
+    "attr3": "خصوصیت ۳",
+    "attr4": "خصوصیت ۴",
+    "attr5": "خصوصیت ۵",
+    "brand": "برند",
+    "purchase_price": "قیمت خرید",
+    "sale_price": "قیمت فروش",
+    "wholesale_price": "قیمت عمده",
+    "stock": "موجودی",
+    "barcode": "بارکد",
+    "seller_name": "فروشنده",
+    "seller_code": "کد فروشنده",
+    "photo_file_id": "عکس",
+}
+
+
 @router.message(F.text == "✏️ ویرایش کالا")
 async def edit_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user):
@@ -279,57 +298,68 @@ async def edit_id(message: Message, state: FSMContext):
     if not product:
         await message.answer("کالایی با این شناسه پیدا نشد.")
         return
-    await state.update_data(edit_id=pid)
+    await state.clear()
     await message.answer(format_product(product), parse_mode="HTML")
     await message.answer(
-        "کدام فیلد را می‌خواهید تغییر دهید؟\n"
-        "یکی از این‌ها را بنویسید:\n"
-        "دسته / خصوصیت1 / خصوصیت2 / خصوصیت3 / خصوصیت4 / خصوصیت5 / برند\n"
-        "قیمت خرید / قیمت فروش / قیمت عمده / موجودی / بارکد\n"
-        "فروشنده / کد فروشنده / عکس",
-        reply_markup=cancel_kb()
+        "کدام فیلد را می‌خواهید تغییر دهید؟",
+        reply_markup=edit_fields_kb(pid)
     )
-    await state.set_state(EditProduct.field)
 
 
-@router.message(EditProduct.field, F.text == "❌ انصراف")
-async def edit_field_cancel(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("لغو شد.", reply_markup=admin_menu())
-
-
-FIELD_MAP = {
-    "دسته": "category",
-    "خصوصیت1": "attr1", "خصوصیت ۱": "attr1",
-    "خصوصیت2": "attr2", "خصوصیت ۲": "attr2",
-    "خصوصیت3": "attr3", "خصوصیت ۳": "attr3",
-    "خصوصیت4": "attr4", "خصوصیت ۴": "attr4",
-    "خصوصیت5": "attr5", "خصوصیت ۵": "attr5",
-    "برند": "brand",
-    "قیمت خرید": "purchase_price",
-    "قیمت فروش": "sale_price",
-    "قیمت عمده": "wholesale_price",
-    "موجودی": "stock",
-    "بارکد": "barcode",
-    "فروشنده": "seller_name",
-    "کد فروشنده": "seller_code",
-    "عکس": "photo_file_id",
-}
-
-
-@router.message(EditProduct.field)
-async def edit_field(message: Message, state: FSMContext):
-    field_fa = message.text.strip()
-    field = FIELD_MAP.get(field_fa)
-    if not field:
-        await message.answer("فیلد معتبر نیست. یکی از لیست را بنویسید.")
+@router.callback_query(F.data.startswith("edit:"))
+async def inline_edit_start(callback: CallbackQuery, state: FSMContext):
+    """وقتی از دکمه ویرایش زیر محصول زده می‌شود"""
+    if not is_admin(callback.from_user):
+        await callback.answer("دسترسی ندارید", show_alert=True)
         return
-    await state.update_data(edit_field=field)
+    pid = int(callback.data.split(":")[1])
+    product = await get_product(pid)
+    if not product:
+        await callback.answer("کالا پیدا نشد", show_alert=True)
+        return
+    await state.clear()
+    await callback.message.answer(format_product(product), parse_mode="HTML")
+    await callback.message.answer(
+        "کدام فیلد را می‌خواهید تغییر دهید؟",
+        reply_markup=edit_fields_kb(pid)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_edit")
+async def cancel_edit_cb(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("ویرایش لغو شد.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("efield:"))
+async def edit_field_chosen(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user):
+        await callback.answer("دسترسی ندارید", show_alert=True)
+        return
+    try:
+        _, pid_str, field = callback.data.split(":", 2)
+        pid = int(pid_str)
+    except Exception:
+        await callback.answer("خطا", show_alert=True)
+        return
+
+    await state.update_data(edit_id=pid, edit_field=field)
+    fa_name = FIELD_FA_NAMES.get(field, field)
+
     if field == "photo_file_id":
-        await message.answer("عکس جدید را ارسال کنید:", reply_markup=cancel_kb())
+        await callback.message.answer(
+            f"🖼 عکس جدید برای «{fa_name}» را ارسال کنید:",
+            reply_markup=cancel_kb()
+        )
     else:
-        await message.answer(f"مقدار جدید برای «{field_fa}» را وارد کنید:", reply_markup=cancel_kb())
+        await callback.message.answer(
+            f"مقدار جدید برای «{fa_name}» را وارد کنید:",
+            reply_markup=cancel_kb()
+        )
     await state.set_state(EditProduct.value)
+    await callback.answer()
 
 
 @router.message(EditProduct.value, F.text == "❌ انصراف")
@@ -346,6 +376,10 @@ async def edit_photo(message: Message, state: FSMContext):
         return
     pid = data["edit_id"]
     product = await get_product(pid)
+    if not product:
+        await state.clear()
+        await message.answer("کالا پیدا نشد.", reply_markup=admin_menu())
+        return
     product["photo_file_id"] = message.photo[-1].file_id
     await update_product(pid, product)
     await state.clear()
