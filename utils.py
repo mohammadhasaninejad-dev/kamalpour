@@ -45,7 +45,6 @@ def format_product(product: dict, short: bool = False) -> str:
         f"💰 قیمت فروش: {format_price(product.get('sale_price'))}",
         f"📦 قیمت عمده: {format_price(product.get('wholesale_price'))}",
         f"📥 قیمت خرید: {format_price(product.get('purchase_price'))}",
-        f"📊 موجودی: {product.get('stock') or 0}",
         f"🔢 بارکد: {product.get('barcode') or '—'}",
         f"👤 فروشنده: {product.get('seller_name') or '—'} ({product.get('seller_code') or '—'})",
         f"🆔 شناسه: {excel_id}",

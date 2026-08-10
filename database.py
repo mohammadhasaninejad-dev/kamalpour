@@ -177,11 +177,18 @@ async def get_product_by_barcode(barcode: str):
             return dict(row) if row else None
 
 
+FA_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
+AR_DIGITS = "٠١٢٣٤٥٦٧٨٩"
+EN_DIGITS = "0123456789"
+_DIGIT_MAP = str.maketrans(FA_DIGITS + AR_DIGITS, EN_DIGITS * 2)
+
+
 def _normalize_fa(text: str) -> str:
-    """یکسان‌سازی کاراکترهای عربی/فارسی رایج و نیم‌فاصله، تا جستجو به تفاوت رسم‌الخط حساس نباشد"""
+    """یکسان‌سازی کاراکترهای عربی/فارسی رایج، ارقام فارسی/عربی و نیم‌فاصله، تا جستجو به این تفاوت‌ها حساس نباشد"""
     if not text:
         return ""
     text = str(text).replace("ي", "ی").replace("ك", "ک")
+    text = text.translate(_DIGIT_MAP)  # ارقام فارسی/عربی -> انگلیسی
     text = text.replace("\u200c", " ")  # نیم‌فاصله -> فاصله
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -189,20 +196,22 @@ def _normalize_fa(text: str) -> str:
 
 def _norm_col(col: str) -> str:
     """همان نرمال‌سازی بالا ولی به‌صورت عبارت SQL، برای اعمال روی مقدار ذخیره‌شده در دیتابیس"""
-    return f"REPLACE(REPLACE(REPLACE(COALESCE({col}, ''), 'ي', 'ی'), 'ك', 'ک'), char(8204), ' ')"
+    expr = f"COALESCE({col}, '')"
+    pairs = [("ي", "ی"), ("ك", "ک"), ("\u200c", " ")]
+    pairs += list(zip(FA_DIGITS, EN_DIGITS)) + list(zip(AR_DIGITS, EN_DIGITS))
+    for frm, to in pairs:
+        expr = f"REPLACE({expr}, '{frm}', '{to}')"
+    return expr
 
 
-def _search_where(query: str):
+def _search_where_cols(query: str, cols: list):
     """
-    جستجوی هوشمند: عبارت به کلمه‌ها شکسته می‌شود و هر کلمه باید یک‌جایی در
-    نام/دسته/برند/بارکد کالا پیدا شود - نه لزوماً پشت‌سرهم. یعنی اگر کاربر فقط
-    اولین و آخرین کلمه‌ی نام کالا را با فاصله بنویسد (مثلاً «دفتر آبی» برای
-    «دفتر ۱۰۰برگ رحلی آبی»)، باز هم پیدا می‌شود.
+    جستجوی هوشمند روی ستون‌های داده‌شده: عبارت به کلمه‌ها شکسته می‌شود و هر کلمه باید
+    یک‌جایی در یکی از ستون‌ها پیدا شود - نه لزوماً پشت‌سرهم.
     """
     words = [w for w in _normalize_fa(query).split(" ") if w]
     if not words:
         words = [""]
-    cols = ["name", "barcode", "category", "brand"]
     clauses = []
     params = []
     for w in words:
@@ -212,6 +221,10 @@ def _search_where(query: str):
         params.extend([like] * len(cols))
     where_sql = " AND ".join(clauses)
     return where_sql, params
+
+
+def _search_where(query: str):
+    return _search_where_cols(query, ["name", "barcode", "category", "brand"])
 
 
 async def search_products(query: str, offset: int = 0, limit: int = 10):
@@ -233,12 +246,40 @@ async def count_search(query: str) -> int:
             return row[0] if row else 0
 
 
+async def search_by_seller(query: str, offset: int = 0, limit: int = 10):
+    where_sql, params = _search_where_cols(query, ["seller_name"])
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = f"SELECT * FROM products WHERE {where_sql} ORDER BY name LIMIT ? OFFSET ?"
+        async with db.execute(sql, (*params, limit, offset)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def count_by_seller(query: str) -> int:
+    where_sql, params = _search_where_cols(query, ["seller_name"])
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        sql = f"SELECT COUNT(*) FROM products WHERE {where_sql}"
+        async with db.execute(sql, params) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+
 async def get_all_products(offset: int = 0, limit: int = 20):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT * FROM products ORDER BY id DESC LIMIT ? OFFSET ?
         """, (limit, offset)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_all_products_full():
+    """همه‌ی کالاها بدون صفحه‌بندی - برای خروجی اکسل"""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM products ORDER BY id") as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 

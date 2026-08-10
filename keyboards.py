@@ -26,7 +26,8 @@ def admin_menu():
         keyboard=[
             [KeyboardButton(text="➕ افزودن کالا"), KeyboardButton(text="✏️ ویرایش کالا")],
             [KeyboardButton(text="🗑 حذف کالا"), KeyboardButton(text="📋 لیست کالاها")],
-            [KeyboardButton(text="📥 ایمپورت اکسل"), KeyboardButton(text="🧨 پاک کردن کامل دیتابیس")],
+            [KeyboardButton(text="📥 ایمپورت اکسل"), KeyboardButton(text="📤 خروجی اکسل")],
+            [KeyboardButton(text="🧨 پاک کردن کامل دیتابیس")],
             [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
         ],
         resize_keyboard=True
@@ -75,6 +76,38 @@ def pagination_kb(page: int, total: int, page_size: int = 10):
     if nav:
         buttons.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+
+
+def results_kb(products: list, page: int, total: int, page_size: int, nav_prefix: str = "page"):
+    """
+    نتایج جستجو به‌صورت دکمه: هر دکمه فقط نام ساخته‌شده‌ی کالا (دسته + خصوصیت‌ها + برند)
+    را نشان می‌دهد؛ با کلیک روی هر دکمه، جزئیات کامل همان کالا نمایش داده می‌شود.
+    nav_prefix باعث می‌شود بشود همین کیبورد را برای چند نوع جستجوی مختلف (متنی، فروشنده)
+    با callback_data های مجزا (page:, spage:, ...) استفاده کرد.
+    """
+    buttons = []
+    for p in products:
+        text = p.get("name") or "بدون نام"
+        if len(text) > 60:
+            text = text[:59] + "…"
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"viewp:{p['id']}")])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"{nav_prefix}:{page-1}"))
+    if (page + 1) * page_size < total:
+        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"{nav_prefix}:{page+1}"))
+    if nav:
+        buttons.append(nav)
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def list_products_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏷 مرور بر اساس دسته", callback_data="browse_by_category")],
+        [InlineKeyboardButton(text="👤 جستجو بر اساس فروشنده", callback_data="browse_by_seller")],
+    ])
 
 
 def confirm_delete_kb(product_id: int):

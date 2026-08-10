@@ -35,3 +35,7 @@ class DeleteProduct(StatesGroup):
 
 class ImportExcel(StatesGroup):
     waiting_file = State()
+
+
+class SellerSearch(StatesGroup):
+    waiting_name = State()
