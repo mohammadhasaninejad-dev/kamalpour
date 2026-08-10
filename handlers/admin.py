@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, ContentType
+from aiogram.types import Message, CallbackQuery, ContentType, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
 import openpyxl
@@ -8,18 +8,20 @@ import os
 
 import inspect
 
-from states import AddProduct, EditProduct, DeleteProduct, ImportExcel
+from states import AddProduct, EditProduct, DeleteProduct, ImportExcel, SellerSearch
 from keyboards import (
     admin_menu, main_menu, cancel_kb, skip_kb,
     confirm_delete_kb, product_actions_kb, back_to_admin_kb, edit_fields_kb,
-    confirm_wipe_kb, browse_categories_kb, browse_attrs_kb, browse_products_nav_kb
+    confirm_wipe_kb, browse_categories_kb, browse_attrs_kb, browse_products_nav_kb,
+    results_kb, list_products_menu_kb
 )
 from database import (
     add_product, update_product, delete_product, get_product,
     count_products, build_product_name, get_product_by_name,
     get_product_by_excel_id, clear_products,
     get_distinct_categories, get_distinct_attr1,
-    get_products_by_category_attr1, count_products_by_category_attr1
+    get_products_by_category_attr1, count_products_by_category_attr1,
+    get_all_products_full, search_by_seller, count_by_seller
 )
 from utils import is_admin, format_product, format_price
 from config import PAGE_SIZE
@@ -501,19 +503,93 @@ async def inline_delete(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- لیست کالاها (مرور بر اساس دسته و خصوصیت ۱) ----------
+# ---------- لیست کالاها (مرور بر اساس دسته، یا جستجو بر اساس فروشنده) ----------
 @router.message(F.text == "📋 لیست کالاها")
 @admin_only
-async def list_products(message: Message, state: FSMContext):
+async def list_products_menu(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "چطور می‌خواهید کالاها را ببینید؟",
+        reply_markup=list_products_menu_kb()
+    )
+
+
+@router.callback_query(F.data == "browse_by_category")
+@admin_only
+async def browse_by_category_start(callback: CallbackQuery, state: FSMContext):
     categories = await get_distinct_categories()
     if not categories:
-        await message.answer("هنوز کالایی ثبت نشده.")
+        await callback.message.edit_text("هنوز کالایی ثبت نشده.")
+        await callback.answer()
         return
     await state.update_data(browse_categories=categories)
-    await message.answer(
+    await callback.message.edit_text(
         f"📋 {len(categories)} دسته موجود است. یک دسته را انتخاب کنید:",
         reply_markup=browse_categories_kb(categories, page=0)
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "browse_by_seller")
+@admin_only
+async def browse_by_seller_start(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SellerSearch.waiting_name)
+    await callback.message.answer("نام فروشنده را وارد کنید:", reply_markup=cancel_kb())
+    await callback.answer()
+
+
+@router.message(SellerSearch.waiting_name, F.text == "❌ انصراف")
+async def seller_search_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
+
+
+@router.message(SellerSearch.waiting_name)
+async def seller_search_query(message: Message, state: FSMContext):
+    query = message.text.strip()
+    if not query:
+        await message.answer("لطفاً نام فروشنده را وارد کنید.")
+        return
+
+    total = await count_by_seller(query)
+    if total == 0:
+        await message.answer(
+            "❌ کالایی از این فروشنده پیدا نشد.\nنام دیگری امتحان کنید یا انصراف بزنید.",
+            reply_markup=cancel_kb()
+        )
+        return
+
+    await state.update_data(seller_query=query)
+    products = await search_by_seller(query, offset=0, limit=PAGE_SIZE)
+    await message.answer(
+        f"👤 کالاهای فروشنده «{query}» ({total} مورد):",
+        reply_markup=results_kb(products, 0, total, PAGE_SIZE, "spage")
+    )
+
+
+@router.callback_query(F.data.startswith("spage:"))
+@admin_only
+async def seller_pagination_handler(callback: CallbackQuery, state: FSMContext):
+    try:
+        page = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await callback.answer("خطا در صفحه‌بندی")
+        return
+
+    data = await state.get_data()
+    query = data.get("seller_query")
+    if not query:
+        await callback.answer("عبارت جستجو منقضی شده، دوباره جستجو کنید.", show_alert=True)
+        return
+
+    total = await count_by_seller(query)
+    products = await search_by_seller(query, offset=page * PAGE_SIZE, limit=PAGE_SIZE)
+
+    await callback.message.edit_text(
+        f"👤 کالاهای فروشنده «{query}» ({total} مورد) - صفحه {page + 1}:",
+        reply_markup=results_kb(products, page, total, PAGE_SIZE, "spage")
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("browsecatpage:"))
@@ -675,6 +751,64 @@ async def cancel_wipe(callback: CallbackQuery):
     await callback.message.edit_text("لغو شد؛ چیزی پاک نشد.")
     await callback.message.answer("منوی مدیریت:", reply_markup=admin_menu())
     await callback.answer()
+
+
+# ---------- خروجی اکسل ----------
+@router.message(F.text == "📤 خروجی اکسل")
+@admin_only
+async def export_excel(message: Message):
+    products = await get_all_products_full()
+    if not products:
+        await message.answer("هنوز کالایی ثبت نشده.")
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "کالاها"
+    headers = [
+        "شناسه", "دسته", "خصوصیت 1", "خصوصیت 2", "خصوصیت 3", "خصوصیت 4", "خصوصیت 5",
+        "برند", "قیمت خرید", "قیمت فروش واحد تک", "قیمت فروش عمده", "بارکد",
+        "موجودی", "فروشنده", "کد فروشنده",
+    ]
+    ws.append(headers)
+    for p in products:
+        ws.append([
+            p.get("excel_id") or "",
+            p.get("category") or "",
+            p.get("attr1") or "",
+            p.get("attr2") or "",
+            p.get("attr3") or "",
+            p.get("attr4") or "",
+            p.get("attr5") or "",
+            p.get("brand") or "",
+            p.get("purchase_price") or 0,
+            p.get("sale_price") or 0,
+            p.get("wholesale_price") or 0,
+            p.get("barcode") or "",
+            p.get("stock") or 0,
+            p.get("seller_name") or "",
+            p.get("seller_code") or "",
+        ])
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            wb.save(tmp.name)
+            tmp_path = tmp.name
+        await message.answer_document(
+            FSInputFile(tmp_path, filename="kalaha.xlsx"),
+            caption=(
+                f"📤 خروجی {len(products)} کالا (شامل ستون بارکد).\n"
+                "این فایل ساختار درستی برای ایمپورت دوباره دارد؛ کالای جدید را به‌عنوان "
+                "ردیف تازه به همین فایل اضافه کنید و دوباره ایمپورتش کنید."
+            )
+        )
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
 
 # ---------- ایمپورت اکسل ----------

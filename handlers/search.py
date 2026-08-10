@@ -3,8 +3,8 @@ from aiogram.types import Message, CallbackQuery, ContentType
 from aiogram.fsm.context import FSMContext
 
 from states import TextSearch
-from keyboards import main_menu, pagination_kb, product_actions_kb, cancel_kb
-from database import search_products, count_search, get_product_by_barcode
+from keyboards import main_menu, results_kb, product_actions_kb, cancel_kb
+from database import search_products, count_search, get_product_by_barcode, get_product
 from utils import is_admin, format_product
 from config import PAGE_SIZE
 
@@ -45,22 +45,11 @@ async def text_search_query(message: Message, state: FSMContext):
 
     await state.update_data(search_query=query)
     products = await search_products(query, offset=0, limit=PAGE_SIZE)
-    admin = is_admin(message.from_user)
 
-    await message.answer(f"🔍 نتایج برای «{query}» ({total} مورد):")
-    for p in products:
-        text = format_product(p)
-        kb = product_actions_kb(p["id"], admin)
-        if p.get("photo_file_id"):
-            await message.answer_photo(p["photo_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
-        else:
-            await message.answer(text, parse_mode="HTML", reply_markup=kb)
-
-    if total > PAGE_SIZE:
-        await message.answer(
-            "صفحات بیشتر:",
-            reply_markup=pagination_kb(0, total, PAGE_SIZE)
-        )
+    await message.answer(
+        f"🔍 نتایج برای «{query}» ({total} مورد):",
+        reply_markup=results_kb(products, 0, total, PAGE_SIZE, "page")
+    )
 
 
 @router.callback_query(F.data.startswith("page:"))
@@ -79,21 +68,30 @@ async def pagination_handler(callback: CallbackQuery, state: FSMContext):
 
     total = await count_search(query)
     products = await search_products(query, offset=page * PAGE_SIZE, limit=PAGE_SIZE)
-    admin = is_admin(callback.from_user)
 
-    await callback.message.answer(f"🔍 صفحه {page + 1} برای «{query}»:")
-    for p in products:
-        text = format_product(p)
-        kb = product_actions_kb(p["id"], admin)
-        if p.get("photo_file_id"):
-            await callback.message.answer_photo(p["photo_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
-        else:
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
-
-    await callback.message.answer(
-        "ناوبری:",
-        reply_markup=pagination_kb(page, total, PAGE_SIZE)
+    await callback.message.edit_text(
+        f"🔍 نتایج برای «{query}» ({total} مورد) - صفحه {page + 1}:",
+        reply_markup=results_kb(products, page, total, PAGE_SIZE, "page")
     )
+    await callback.answer()
+
+
+# ---------- نمایش جزئیات کامل یک کالا (از روی دکمه‌ی نتایج) ----------
+@router.callback_query(F.data.startswith("viewp:"))
+async def view_product(callback: CallbackQuery):
+    pid = int(callback.data.split(":", 1)[1])
+    product = await get_product(pid)
+    if not product:
+        await callback.answer("کالا پیدا نشد", show_alert=True)
+        return
+
+    admin = is_admin(callback.from_user)
+    text = format_product(product)
+    kb = product_actions_kb(product["id"], admin)
+    if product.get("photo_file_id"):
+        await callback.message.answer_photo(product["photo_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
