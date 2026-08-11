@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ContentType
 from aiogram.fsm.context import FSMContext
 
-from states import TextSearch
+from states import TextSearch, AddProduct
 from keyboards import main_menu, results_kb, product_actions_kb, cancel_kb
 from database import search_products, count_search, get_product_by_barcode, get_product
 from utils import is_admin, format_product
@@ -76,7 +76,7 @@ async def pagination_handler(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ---------- نمایش جزئیات کامل یک کالا (از روی دکمه‌ی نتایج) ----------
+# ---------- نمایش جزئیات کامل یک کالا ----------
 @router.callback_query(F.data.startswith("viewp:"))
 async def view_product(callback: CallbackQuery):
     pid = int(callback.data.split(":", 1)[1])
@@ -95,10 +95,33 @@ async def view_product(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- دریافت بارکد از مینی‌اپ ----------
+# ---------- دریافت بارکد از مینی‌اپ (استعلام) ----------
 @router.message(F.content_type == ContentType.WEB_APP_DATA)
-async def webapp_data_handler(message: Message):
-    """دریافت بارکد اسکن‌شده از مینی‌اپ"""
+async def webapp_data_handler(message: Message, state: FSMContext):
+    """
+    اگر کاربر در حال افزودن کالا و مرحله بارکد باشد، این هندلر کاری نمی‌کند
+    تا هندلر admin (AddProduct.barcode) آن را بگیرد.
+    در غیر این صورت استعلام بارکد انجام می‌شود.
+    """
+    current = await state.get_state()
+    if current and current.startswith("AddProduct"):
+        # بگذار admin هندلر آن را مدیریت کند — با propagate
+        # چون state-filter در admin دقیق‌تر است، اینجا فقط رد می‌شویم اگر در AddProduct باشیم
+        # اما aiogram فقط یک هندلر را صدا می‌زند؛ پس باید خودمان منطق افزودن را اینجا هم پشتیبانی کنیم
+        # یا state را چک کنیم و داده را برای admin بگذاریم.
+        # ساده‌ترین راه: اگر در AddProduct.barcode هستیم، بارکد را ست کنیم.
+        if current == AddProduct.barcode.state:
+            barcode = (message.web_app_data.data or "").strip()
+            await state.update_data(barcode=barcode or None)
+            await state.set_state(AddProduct.seller_name)
+            await message.answer(
+                f"بارکد اسکن‌شده: <code>{barcode or '—'}</code>\nنام فروشنده:",
+                parse_mode="HTML",
+                reply_markup=__import__("keyboards", fromlist=["skip_kb"]).skip_kb()
+            )
+            return
+        return
+
     data = message.web_app_data.data
     barcode = data.strip() if data else ""
     admin = is_admin(message.from_user)

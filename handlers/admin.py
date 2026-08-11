@@ -1,17 +1,15 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ContentType, FSInputFile
 from aiogram.fsm.context import FSMContext
-from aiogram.filters import StateFilter
 import openpyxl
 import tempfile
 import os
-
 import inspect
 
-from states import AddProduct, EditProduct, DeleteProduct, ImportExcel, SellerSearch
+from states import AddProduct, EditProduct, DeleteProduct, ImportExcel, SellerSearch, AddHistory
 from keyboards import (
-    admin_menu, main_menu, cancel_kb, skip_kb,
-    confirm_delete_kb, product_actions_kb, back_to_admin_kb, edit_fields_kb,
+    admin_menu, main_menu, cancel_kb, skip_kb, barcode_kb, year_suggest_kb,
+    confirm_delete_kb, product_actions_kb, edit_fields_kb,
     confirm_wipe_kb, browse_categories_kb, browse_attrs_kb, browse_products_nav_kb,
     results_kb, list_products_menu_kb
 )
@@ -21,29 +19,18 @@ from database import (
     get_product_by_excel_id, clear_products,
     get_distinct_categories, get_distinct_attr1,
     get_products_by_category_attr1, count_products_by_category_attr1,
-    get_all_products_full, search_by_seller, count_by_seller
+    get_all_products_full, search_by_seller, count_by_seller,
+    add_price_history, get_price_history
 )
-from utils import is_admin, format_product, format_price
+from utils import is_admin, format_product, format_price, parse_number, parse_int, format_date
 from config import PAGE_SIZE
 
 router = Router()
 
+CURRENT_YEAR = 1405
+
 
 def admin_only(handler):
-    """
-    دکوریتور یکپارچه برای گیت‌کردن هندلرهای ادمین.
-    قبلاً این تابع تعریف شده بود ولی هیچ‌جا استفاده نمی‌شد و به‌جایش هر هندلر
-    جداگانه و دستی is_admin را چک می‌کرد؛ اگر هندلر جدیدی اضافه می‌شد و این چک
-    فراموش می‌شد یک حفره‌ی امنیتی ایجاد می‌کرد. حالا همه‌جا از همین دکوریتور
-    استفاده می‌شود.
-
-    نکته‌ی فنی: چون wrapper خودش **kwargs دارد، aiogram همه‌ی چیزهایی که در دسترس
-    است (state, bot, dispatcher, ...) را به آن پاس می‌دهد. اگر همه‌ی این‌ها را
-    بی‌قید و شرط به handler اصلی فوروارد کنیم، برای هندلرهایی که فقط message
-    یا (message, state) می‌گیرند خطای "unexpected keyword argument" می‌دهد.
-    برای همین با inspect فقط پارامترهایی که خودِ handler واقعاً در امضایش
-    اعلام کرده فیلتر و فوروارد می‌شوند.
-    """
     handler_params = inspect.signature(handler).parameters
 
     async def wrapper(event, **kwargs):
@@ -78,6 +65,29 @@ async def back_to_admin(message: Message, state: FSMContext):
     await message.answer("پنل مدیریت:", reply_markup=admin_menu())
 
 
+# ---------- دکمه‌های منوی اصلی ادمین ----------
+@router.message(F.text == "📋 لیست کالا بر اساس دسته")
+@admin_only
+async def main_browse_category(message: Message, state: FSMContext):
+    await state.clear()
+    categories = await get_distinct_categories()
+    if not categories:
+        await message.answer("هنوز کالایی ثبت نشده.", reply_markup=main_menu(True))
+        return
+    await state.update_data(browse_categories=categories)
+    await message.answer(
+        f"📋 {len(categories)} دسته موجود است. یک دسته را انتخاب کنید:",
+        reply_markup=browse_categories_kb(categories, page=0)
+    )
+
+
+@router.message(F.text == "👤 جستجو بر اساس فروشنده")
+@admin_only
+async def main_seller_search(message: Message, state: FSMContext):
+    await state.set_state(SellerSearch.waiting_name)
+    await message.answer("نام فروشنده را وارد کنید:", reply_markup=cancel_kb())
+
+
 # ---------- افزودن کالا ----------
 @router.message(F.text == "➕ افزودن کالا")
 @admin_only
@@ -100,10 +110,17 @@ async def add_start(message: Message, state: FSMContext):
 @router.message(AddProduct.barcode, F.text == "❌ انصراف")
 @router.message(AddProduct.seller_name, F.text == "❌ انصراف")
 @router.message(AddProduct.seller_code, F.text == "❌ انصراف")
+@router.message(AddProduct.purchase_day, F.text == "❌ انصراف")
+@router.message(AddProduct.purchase_month, F.text == "❌ انصراف")
+@router.message(AddProduct.purchase_year, F.text == "❌ انصراف")
 @router.message(AddProduct.photo, F.text == "❌ انصراف")
+@router.message(AddHistory.day, F.text == "❌ انصراف")
+@router.message(AddHistory.month, F.text == "❌ انصراف")
+@router.message(AddHistory.year, F.text == "❌ انصراف")
+@router.message(AddHistory.price, F.text == "❌ انصراف")
 async def add_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("افزودن کالا لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
 
 
 @router.message(AddProduct.category)
@@ -161,44 +178,56 @@ async def add_brand(message: Message, state: FSMContext):
     await message.answer("قیمت خرید (تومان) - عدد وارد کنید یا رد کنید:", reply_markup=skip_kb())
 
 
-def parse_number(text: str):
-    if text == "⏭ رد کردن":
-        return 0
-    try:
-        return float(text.replace(",", "").replace("٬", "").strip())
-    except Exception:
-        return None
-
-
 @router.message(AddProduct.purchase_price)
 async def add_purchase(message: Message, state: FSMContext):
     val = parse_number(message.text)
     if val is None:
-        await message.answer("عدد معتبر وارد کنید یا رد کنید.")
+        await message.answer("عدد معتبر وارد کنید (فارسی یا انگلیسی) یا رد کنید.")
         return
     await state.update_data(purchase_price=val)
     await state.set_state(AddProduct.sale_price)
-    await message.answer("قیمت فروش واحد (تومان):", reply_markup=skip_kb())
+    await message.answer(
+        "درصد سود فروش را وارد کنید (مثلاً ۳۰ یعنی ۳۰٪ اضافه به قیمت خرید):\n"
+        "یا «رد کردن» برای صفر.",
+        reply_markup=skip_kb()
+    )
 
 
 @router.message(AddProduct.sale_price)
 async def add_sale(message: Message, state: FSMContext):
-    val = parse_number(message.text)
-    if val is None:
-        await message.answer("عدد معتبر وارد کنید یا رد کنید.")
-        return
-    await state.update_data(sale_price=val)
+    data = await state.get_data()
+    purchase = data.get("purchase_price") or 0
+    if message.text == "⏭ رد کردن":
+        percent = None
+        sale = 0
+    else:
+        percent = parse_number(message.text)
+        if percent is None:
+            await message.answer("عدد معتبر (درصد) وارد کنید یا رد کنید.")
+            return
+        sale = purchase * (1 + percent / 100.0) if purchase else 0
+    await state.update_data(sale_price=sale, sale_percent=percent)
     await state.set_state(AddProduct.wholesale_price)
-    await message.answer("قیمت فروش عمده (تومان):", reply_markup=skip_kb())
+    await message.answer(
+        "درصد سود عمده را وارد کنید (مثلاً ۱۵):\nیا «رد کردن» برای صفر.",
+        reply_markup=skip_kb()
+    )
 
 
 @router.message(AddProduct.wholesale_price)
 async def add_wholesale(message: Message, state: FSMContext):
-    val = parse_number(message.text)
-    if val is None:
-        await message.answer("عدد معتبر وارد کنید یا رد کنید.")
-        return
-    await state.update_data(wholesale_price=val)
+    data = await state.get_data()
+    purchase = data.get("purchase_price") or 0
+    if message.text == "⏭ رد کردن":
+        percent = None
+        wholesale = 0
+    else:
+        percent = parse_number(message.text)
+        if percent is None:
+            await message.answer("عدد معتبر (درصد) وارد کنید یا رد کنید.")
+            return
+        wholesale = purchase * (1 + percent / 100.0) if purchase else 0
+    await state.update_data(wholesale_price=wholesale, wholesale_percent=percent)
     await state.set_state(AddProduct.stock)
     await message.answer("موجودی (عدد صحیح):", reply_markup=skip_kb())
 
@@ -208,14 +237,28 @@ async def add_stock(message: Message, state: FSMContext):
     if message.text == "⏭ رد کردن":
         val = 0
     else:
-        try:
-            val = int(message.text.strip())
-        except Exception:
+        val = parse_int(message.text)
+        if val is None:
             await message.answer("عدد صحیح وارد کنید یا رد کنید.")
             return
     await state.update_data(stock=val)
     await state.set_state(AddProduct.barcode)
-    await message.answer("بارکد کالا:", reply_markup=skip_kb())
+    await message.answer(
+        "بارکد کالا را تایپ کنید، یا با دکمه زیر اسکن کنید، یا رد کنید:",
+        reply_markup=barcode_kb()
+    )
+
+
+@router.message(AddProduct.barcode, F.content_type == ContentType.WEB_APP_DATA)
+async def add_barcode_scan(message: Message, state: FSMContext):
+    barcode = (message.web_app_data.data or "").strip()
+    await state.update_data(barcode=barcode or None)
+    await state.set_state(AddProduct.seller_name)
+    await message.answer(
+        f"بارکد اسکن‌شده: <code>{barcode or '—'}</code>\nنام فروشنده:",
+        parse_mode="HTML",
+        reply_markup=skip_kb()
+    )
 
 
 @router.message(AddProduct.barcode)
@@ -238,11 +281,57 @@ async def add_seller_name(message: Message, state: FSMContext):
 async def add_seller_code(message: Message, state: FSMContext):
     val = None if message.text == "⏭ رد کردن" else message.text.strip()
     await state.update_data(seller_code=val)
-    await state.set_state(AddProduct.photo)
+    await state.set_state(AddProduct.purchase_day)
+    await message.answer("روز تاریخ خرید (۱ تا ۳۱):", reply_markup=skip_kb())
+
+
+@router.message(AddProduct.purchase_day)
+async def add_purchase_day(message: Message, state: FSMContext):
+    if message.text == "⏭ رد کردن":
+        await state.update_data(purchase_day=None, purchase_month=None, purchase_year=None)
+        await state.set_state(AddProduct.photo)
+        await message.answer("عکس کالا را ارسال کنید (یا رد کردن):", reply_markup=skip_kb())
+        return
+    val = parse_int(message.text)
+    if val is None or val < 1 or val > 31:
+        await message.answer("روز معتبر (۱–۳۱) وارد کنید یا رد کنید.")
+        return
+    await state.update_data(purchase_day=val)
+    await state.set_state(AddProduct.purchase_month)
+    await message.answer("ماه تاریخ خرید (۱ تا ۱۲):", reply_markup=skip_kb())
+
+
+@router.message(AddProduct.purchase_month)
+async def add_purchase_month(message: Message, state: FSMContext):
+    if message.text == "⏭ رد کردن":
+        await state.update_data(purchase_month=None, purchase_year=None)
+        await state.set_state(AddProduct.photo)
+        await message.answer("عکس کالا را ارسال کنید (یا رد کردن):", reply_markup=skip_kb())
+        return
+    val = parse_int(message.text)
+    if val is None or val < 1 or val > 12:
+        await message.answer("ماه معتبر (۱–۱۲) وارد کنید یا رد کنید.")
+        return
+    await state.update_data(purchase_month=val)
+    await state.set_state(AddProduct.purchase_year)
     await message.answer(
-        "عکس کالا را ارسال کنید (یا رد کردن):",
-        reply_markup=skip_kb()
+        f"سال تاریخ خرید (هجری شمسی).\nمی‌توانید {CURRENT_YEAR} را انتخاب کنید یا سال دیگری تایپ کنید:",
+        reply_markup=year_suggest_kb(CURRENT_YEAR)
     )
+
+
+@router.message(AddProduct.purchase_year)
+async def add_purchase_year(message: Message, state: FSMContext):
+    if message.text == "⏭ رد کردن":
+        await state.update_data(purchase_year=None)
+    else:
+        val = parse_int(message.text)
+        if val is None or val < 1300 or val > 1500:
+            await message.answer("سال معتبر وارد کنید (مثلاً ۱۴۰۵) یا رد کنید.")
+            return
+        await state.update_data(purchase_year=val)
+    await state.set_state(AddProduct.photo)
+    await message.answer("عکس کالا را ارسال کنید (یا رد کردن):", reply_markup=skip_kb())
 
 
 @router.message(AddProduct.photo, F.photo)
@@ -254,7 +343,8 @@ async def add_photo(message: Message, state: FSMContext):
     await state.clear()
     product = await get_product(product_id)
     await message.answer("✅ کالا با موفقیت اضافه شد:", reply_markup=admin_menu())
-    await message.answer(format_product(product), parse_mode="HTML")
+    await message.answer(format_product(product), parse_mode="HTML",
+                         reply_markup=product_actions_kb(product_id, True))
 
 
 @router.message(AddProduct.photo)
@@ -268,7 +358,8 @@ async def add_photo_skip(message: Message, state: FSMContext):
     await state.clear()
     product = await get_product(product_id)
     await message.answer("✅ کالا با موفقیت اضافه شد (بدون عکس):", reply_markup=admin_menu())
-    await message.answer(format_product(product), parse_mode="HTML")
+    await message.answer(format_product(product), parse_mode="HTML",
+                         reply_markup=product_actions_kb(product_id, True))
 
 
 # ---------- ویرایش کالا ----------
@@ -281,13 +372,16 @@ FIELD_FA_NAMES = {
     "attr5": "خصوصیت ۵",
     "brand": "برند",
     "purchase_price": "قیمت خرید",
-    "sale_price": "قیمت فروش",
-    "wholesale_price": "قیمت عمده",
+    "sale_price": "درصد سود فروش",
+    "wholesale_price": "درصد سود عمده",
     "stock": "موجودی",
     "barcode": "بارکد",
     "seller_name": "فروشنده",
     "seller_code": "کد فروشنده",
     "photo_file_id": "عکس",
+    "purchase_day": "روز خرید",
+    "purchase_month": "ماه خرید",
+    "purchase_year": "سال خرید",
 }
 
 
@@ -297,7 +391,7 @@ async def edit_start(message: Message, state: FSMContext):
     await state.set_state(EditProduct.waiting_id)
     await message.answer(
         "شناسه کالایی که می‌خواهید ویرایش کنید را وارد کنید:\n"
-        "(همان شناسه‌ای که زیر مشخصات هر کالا در لیست کالاها یا استعلام نمایش داده می‌شود)",
+        "(همان شناسه‌ای که زیر مشخصات هر کالا نمایش داده می‌شود)",
         reply_markup=cancel_kb()
     )
 
@@ -330,7 +424,6 @@ async def edit_id(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("edit:"))
 @admin_only
 async def inline_edit_start(callback: CallbackQuery, state: FSMContext):
-    """وقتی از دکمه ویرایش زیر محصول زده می‌شود"""
     pid = int(callback.data.split(":")[1])
     product = await get_product(pid)
     if not product:
@@ -370,6 +463,21 @@ async def edit_field_chosen(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             f"🖼 عکس جدید برای «{fa_name}» را ارسال کنید:",
             reply_markup=cancel_kb()
+        )
+    elif field == "sale_price":
+        await callback.message.answer(
+            "درصد سود فروش جدید را وارد کنید (مثلاً ۳۰):",
+            reply_markup=cancel_kb()
+        )
+    elif field == "wholesale_price":
+        await callback.message.answer(
+            "درصد سود عمده جدید را وارد کنید (مثلاً ۱۵):",
+            reply_markup=cancel_kb()
+        )
+    elif field == "purchase_year":
+        await callback.message.answer(
+            f"سال خرید جدید را وارد کنید (پیشنهاد: {CURRENT_YEAR}):",
+            reply_markup=year_suggest_kb(CURRENT_YEAR)
         )
     else:
         await callback.message.answer(
@@ -417,18 +525,56 @@ async def edit_value(message: Message, state: FSMContext):
         return
 
     text = message.text.strip()
-    if field in ("purchase_price", "sale_price", "wholesale_price"):
+    purchase = product.get("purchase_price") or 0
+
+    if field == "purchase_price":
         val = parse_number(text)
         if val is None:
             await message.answer("عدد معتبر وارد کنید.")
             return
-        product[field] = val
+        product["purchase_price"] = val
+        # اگر درصدها موجودند، فروش و عمده را دوباره محاسبه کن
+        if product.get("sale_percent") is not None:
+            product["sale_price"] = val * (1 + float(product["sale_percent"]) / 100.0)
+        if product.get("wholesale_percent") is not None:
+            product["wholesale_price"] = val * (1 + float(product["wholesale_percent"]) / 100.0)
+
+    elif field == "sale_price":
+        percent = parse_number(text)
+        if percent is None:
+            await message.answer("درصد معتبر وارد کنید.")
+            return
+        product["sale_percent"] = percent
+        product["sale_price"] = purchase * (1 + percent / 100.0) if purchase else 0
+
+    elif field == "wholesale_price":
+        percent = parse_number(text)
+        if percent is None:
+            await message.answer("درصد معتبر وارد کنید.")
+            return
+        product["wholesale_percent"] = percent
+        product["wholesale_price"] = purchase * (1 + percent / 100.0) if purchase else 0
+
     elif field == "stock":
-        try:
-            product[field] = int(text)
-        except Exception:
+        val = parse_int(text)
+        if val is None:
             await message.answer("عدد صحیح وارد کنید.")
             return
+        product[field] = val
+
+    elif field in ("purchase_day", "purchase_month", "purchase_year"):
+        val = parse_int(text)
+        if val is None:
+            await message.answer("عدد معتبر وارد کنید.")
+            return
+        if field == "purchase_day" and (val < 1 or val > 31):
+            await message.answer("روز باید بین ۱ تا ۳۱ باشد.")
+            return
+        if field == "purchase_month" and (val < 1 or val > 12):
+            await message.answer("ماه باید بین ۱ تا ۱۲ باشد.")
+            return
+        product[field] = val
+
     else:
         product[field] = text
 
@@ -436,7 +582,118 @@ async def edit_value(message: Message, state: FSMContext):
     await state.clear()
     updated = await get_product(pid)
     await message.answer("✅ کالا به‌روز شد:", reply_markup=admin_menu())
-    await message.answer(format_product(updated), parse_mode="HTML")
+    await message.answer(format_product(updated), parse_mode="HTML",
+                         reply_markup=product_actions_kb(pid, True))
+
+
+# ---------- هیستوری قیمت ----------
+@router.callback_query(F.data.startswith("addhist:"))
+@admin_only
+async def add_history_start(callback: CallbackQuery, state: FSMContext):
+    pid = int(callback.data.split(":")[1])
+    product = await get_product(pid)
+    if not product:
+        await callback.answer("کالا پیدا نشد", show_alert=True)
+        return
+    await state.update_data(hist_product_id=pid)
+    await state.set_state(AddHistory.day)
+    await callback.message.answer(
+        f"افزودن هیستوری قیمت خرید برای:\n{product.get('name') or '—'}\n\n"
+        "روز تاریخ را وارد کنید (۱–۳۱):",
+        reply_markup=cancel_kb()
+    )
+    await callback.answer()
+
+
+@router.message(AddHistory.day)
+async def hist_day(message: Message, state: FSMContext):
+    val = parse_int(message.text)
+    if val is None or val < 1 or val > 31:
+        await message.answer("روز معتبر (۱–۳۱) وارد کنید.")
+        return
+    await state.update_data(hist_day=val)
+    await state.set_state(AddHistory.month)
+    await message.answer("ماه را وارد کنید (۱–۱۲):", reply_markup=cancel_kb())
+
+
+@router.message(AddHistory.month)
+async def hist_month(message: Message, state: FSMContext):
+    val = parse_int(message.text)
+    if val is None or val < 1 or val > 12:
+        await message.answer("ماه معتبر (۱–۱۲) وارد کنید.")
+        return
+    await state.update_data(hist_month=val)
+    await state.set_state(AddHistory.year)
+    await message.answer(
+        f"سال را وارد کنید (پیشنهاد: {CURRENT_YEAR}):",
+        reply_markup=year_suggest_kb(CURRENT_YEAR)
+    )
+
+
+@router.message(AddHistory.year)
+async def hist_year(message: Message, state: FSMContext):
+    val = parse_int(message.text)
+    if val is None or val < 1300 or val > 1500:
+        await message.answer("سال معتبر وارد کنید.")
+        return
+    await state.update_data(hist_year=val)
+    await state.set_state(AddHistory.price)
+    await message.answer("قیمت خرید جدید را وارد کنید (تومان):", reply_markup=cancel_kb())
+
+
+@router.message(AddHistory.price)
+async def hist_price(message: Message, state: FSMContext):
+    price = parse_number(message.text)
+    if price is None or price < 0:
+        await message.answer("قیمت معتبر وارد کنید.")
+        return
+    data = await state.get_data()
+    pid = data["hist_product_id"]
+    day = data["hist_day"]
+    month = data["hist_month"]
+    year = data["hist_year"]
+
+    await add_price_history(pid, day, month, year, price)
+    await state.clear()
+
+    product = await get_product(pid)
+    await message.answer(
+        f"✅ هیستوری ثبت شد.\n"
+        f"📅 {day}/{month}/{year} — {format_price(price)}\n\n"
+        "اگر تاریخ جدیدتر بود، قیمت خرید و فروش/عمده محصول به‌روز شدند.",
+        reply_markup=admin_menu()
+    )
+    await message.answer(
+        format_product(product),
+        parse_mode="HTML",
+        reply_markup=product_actions_kb(pid, True)
+    )
+
+
+@router.callback_query(F.data.startswith("showhist:"))
+@admin_only
+async def show_history(callback: CallbackQuery):
+    pid = int(callback.data.split(":")[1])
+    product = await get_product(pid)
+    if not product:
+        await callback.answer("کالا پیدا نشد", show_alert=True)
+        return
+
+    history = await get_price_history(pid)
+    if not history:
+        await callback.message.answer(
+            f"📜 هیستوری‌ای برای «{product.get('name') or '—'}» ثبت نشده."
+        )
+        await callback.answer()
+        return
+
+    lines = [f"📜 هیستوری قیمت خرید — <b>{product.get('name') or '—'}</b>\n"]
+    for h in history:
+        lines.append(
+            f"📅 {h['day']}/{h['month']}/{h['year']} — {format_price(h['price'])}"
+        )
+    await callback.message.answer("\n".join(lines), parse_mode="HTML")
+    await callback.answer()
 
 
 # ---------- حذف کالا ----------
@@ -503,7 +760,7 @@ async def inline_delete(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- لیست کالاها (مرور بر اساس دسته، یا جستجو بر اساس فروشنده) ----------
+# ---------- لیست کالاها ----------
 @router.message(F.text == "📋 لیست کالاها")
 @admin_only
 async def list_products_menu(message: Message, state: FSMContext):
@@ -617,7 +874,6 @@ async def browse_category_select(callback: CallbackQuery, state: FSMContext):
     await state.update_data(browse_category=category, browse_attrs=attrs)
 
     if not attrs:
-        # این دسته خصوصیت ۱ ندارد؛ مستقیم کالاها نمایش داده می‌شوند
         await state.update_data(browse_attr1=None)
         await callback.answer()
         await send_browse_products(callback.message, state, callback.from_user, page=0)
@@ -694,7 +950,6 @@ async def browse_products_page(callback: CallbackQuery, state: FSMContext):
 
 
 async def send_browse_products(message: Message, state: FSMContext, user, page: int):
-    """نمایش کالاهای یک دسته (و در صورت وجود، یک خصوصیت ۱) به‌صورت صفحه‌بندی‌شده"""
     data = await state.get_data()
     category = data.get("browse_category")
     attr1 = data.get("browse_attr1")
@@ -769,6 +1024,7 @@ async def export_excel(message: Message):
         "شناسه", "دسته", "خصوصیت 1", "خصوصیت 2", "خصوصیت 3", "خصوصیت 4", "خصوصیت 5",
         "برند", "قیمت خرید", "قیمت فروش واحد تک", "قیمت فروش عمده", "بارکد",
         "موجودی", "فروشنده", "کد فروشنده",
+        "تاریخ خرید - روز", "تاریخ خرید - ماه", "تاریخ خرید - سال",
     ]
     ws.append(headers)
     for p in products:
@@ -788,6 +1044,9 @@ async def export_excel(message: Message):
             p.get("stock") or 0,
             p.get("seller_name") or "",
             p.get("seller_code") or "",
+            p.get("purchase_day") or "",
+            p.get("purchase_month") or "",
+            p.get("purchase_year") or "",
         ])
 
     tmp_path = None
@@ -797,11 +1056,7 @@ async def export_excel(message: Message):
             tmp_path = tmp.name
         await message.answer_document(
             FSInputFile(tmp_path, filename="kalaha.xlsx"),
-            caption=(
-                f"📤 خروجی {len(products)} کالا (شامل ستون بارکد).\n"
-                "این فایل ساختار درستی برای ایمپورت دوباره دارد؛ کالای جدید را به‌عنوان "
-                "ردیف تازه به همین فایل اضافه کنید و دوباره ایمپورتش کنید."
-            )
+            caption=f"📤 خروجی {len(products)} کالا (شامل تاریخ خرید و بارکد)."
         )
     finally:
         if tmp_path:
@@ -818,13 +1073,9 @@ async def import_start(message: Message, state: FSMContext):
     await state.set_state(ImportExcel.waiting_file)
     await message.answer(
         "فایل اکسل را ارسال کنید.\n"
-        "✅ این عملیات جایگزین‌کننده (destructive) نیست: کالاهایی که از قبل وجود داشته "
-        "باشند فقط قیمت‌شان به‌روزرسانی می‌شود و بارکد، موجودی و عکسی که قبلاً برایشان "
-        "ثبت کرده‌اید دست‌نخورده می‌ماند. کالاهای جدیدِ اکسل هم اضافه می‌شوند.\n"
-        "🆔 تشخیص کالای تکراری بر اساس ستون «شناسه» انجام می‌شود (اگر این ستون در فایل "
-        "باشد)، نه بر اساس نام کالا؛ بنابراین حتی اگر چند کالا دسته/خصوصیت/برند یکسانی "
-        "داشته باشند، درست تشخیص داده می‌شوند و حذف نمی‌شوند.\n"
-        "ستون‌ها باید مطابق نمونه قبلی باشند.",
+        "✅ کالاهای موجود فقط به‌روزرسانی می‌شوند و بارکد/موجودی/عکس قبلی حفظ می‌شود.\n"
+        "🆔 تشخیص تکراری بر اساس ستون «شناسه» است.\n"
+        "ستون‌های تاریخ خرید (روز/ماه/سال) و بارکد پشتیبانی می‌شوند.",
         reply_markup=cancel_kb()
     )
 
@@ -852,10 +1103,9 @@ async def import_excel(message: Message, state: FSMContext):
         wb = openpyxl.load_workbook(tmp_path)
         ws = wb.active
 
-        # پیدا کردن ردیف هدر
         header_row = None
         for row in range(1, 6):
-            vals = [ws.cell(row, c).value for c in range(1, 15)]
+            vals = [ws.cell(row, c).value for c in range(1, 20)]
             if any(v and "دسته" in str(v) for v in vals):
                 header_row = row
                 break
@@ -863,9 +1113,8 @@ async def import_excel(message: Message, state: FSMContext):
             await message.answer("هدر «دسته» در فایل پیدا نشد.")
             return
 
-        # پیدا کردن ستون‌ها
         col_map = {}
-        for c in range(1, 20):
+        for c in range(1, 25):
             val = ws.cell(header_row, c).value
             if not val:
                 continue
@@ -900,6 +1149,12 @@ async def import_excel(message: Message, state: FSMContext):
                 col_map["barcode"] = c
             elif "موجودی" in v:
                 col_map["stock"] = c
+            elif "تاریخ خرید - روز" in v or ("روز" in v and "تاریخ" in v):
+                col_map["purchase_day"] = c
+            elif "تاریخ خرید - ماه" in v or ("ماه" in v and "تاریخ" in v):
+                col_map["purchase_month"] = c
+            elif "تاریخ خرید - سال" in v or ("سال" in v and "تاریخ" in v):
+                col_map["purchase_year"] = c
 
         if "category" not in col_map:
             await message.answer("ستون دسته پیدا نشد.")
@@ -953,24 +1208,21 @@ async def import_excel(message: Message, state: FSMContext):
                 "wholesale_price": get_num("wholesale_price") or 0,
                 "seller_name": str(get("seller_name")).strip() if get("seller_name") else None,
                 "seller_code": str(get("seller_code")).strip() if get("seller_code") else None,
+                "purchase_day": get_int("purchase_day"),
+                "purchase_month": get_int("purchase_month"),
+                "purchase_year": get_int("purchase_year"),
             }
 
-            # تشخیص کالای تکراری: در درجه‌ی اول بر اساس ستون «شناسه» اکسل (منحصربه‌فرد
-            # برای هر ردیف)، چون تطبیق بر اساس نام باعث می‌شد کالاهای مختلفی که دسته/
-            # خصوصیت/برند یکسانی دارند و در نتیجه نام ساخته‌شده‌ی یکسانی پیدا می‌کنند
-            # به‌اشتباه یک کالا در نظر گرفته شوند و حذف/بازنویسی شوند. اگر ستون شناسه در
-            # فایل نبود (فایل‌های قدیمی)، به‌صورت پشتیبان همان تطبیق بر اساس نام انجام می‌شود.
             if excel_id_val:
                 existing = await get_product_by_excel_id(excel_id_val)
             else:
                 name = build_product_name(
                     data["category"], data["attr1"], data["attr2"],
-                    data["attr3"], data["attr4"], data["attr5"], data["brand"]
+                    data["attr3"], data["attr4"], data["attr5"],
+                    data["brand"], data["seller_name"]
                 )
                 existing = await get_product_by_name(name)
 
-            # بارکد و موجودی: اگر ستونش در اکسل بود همان مقدار اکسل استفاده می‌شود،
-            # وگرنه مقدار قبلیِ ثبت‌شده در ربات (اگر کالا از قبل وجود داشت) حفظ می‌شود.
             excel_barcode = get("barcode")
             excel_stock = get_int("stock")
 
@@ -978,12 +1230,23 @@ async def import_excel(message: Message, state: FSMContext):
                 data["barcode"] = excel_barcode if excel_barcode is not None else existing.get("barcode")
                 data["stock"] = excel_stock if excel_stock is not None else existing.get("stock")
                 data["photo_file_id"] = existing.get("photo_file_id")
+                data["sale_percent"] = existing.get("sale_percent")
+                data["wholesale_percent"] = existing.get("wholesale_percent")
+                # اگر تاریخ در اکسل نبود، تاریخ قبلی را نگه دار
+                if data["purchase_day"] is None:
+                    data["purchase_day"] = existing.get("purchase_day")
+                if data["purchase_month"] is None:
+                    data["purchase_month"] = existing.get("purchase_month")
+                if data["purchase_year"] is None:
+                    data["purchase_year"] = existing.get("purchase_year")
                 await update_product(existing["id"], data)
                 updated += 1
             else:
-                data["barcode"] = excel_barcode
+                data["barcode"] = str(excel_barcode).strip() if excel_barcode is not None else None
                 data["stock"] = excel_stock or 0
                 data["photo_file_id"] = None
+                data["sale_percent"] = None
+                data["wholesale_percent"] = None
                 await add_product(data)
                 added += 1
 
@@ -991,18 +1254,13 @@ async def import_excel(message: Message, state: FSMContext):
         await message.answer(
             "✅ ایمپورت با موفقیت انجام شد.\n"
             f"➕ کالای جدید: {added}\n"
-            f"🔄 کالای به‌روزشده (با حفظ بارکد/موجودی/عکس قبلی): {updated}",
+            f"🔄 کالای به‌روزشده: {updated}",
             reply_markup=admin_menu()
         )
     except Exception as e:
-        await message.answer(f"خطا در پردازش فایل: {e}")
+        await message.answer(f"❌ خطا در پردازش فایل: {e}")
     finally:
         try:
             os.unlink(tmp_path)
         except Exception:
             pass
-
-
-@router.message(ImportExcel.waiting_file)
-async def import_wrong(message: Message):
-    await message.answer("لطفاً فایل اکسل ارسال کنید یا انصراف بزنید.")
