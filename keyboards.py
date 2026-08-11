@@ -17,6 +17,10 @@ def main_menu(is_admin: bool = False):
         ],
     ]
     if is_admin:
+        buttons.append([
+            KeyboardButton(text="📋 لیست کالا بر اساس دسته"),
+            KeyboardButton(text="👤 جستجو بر اساس فروشنده"),
+        ])
         buttons.append([KeyboardButton(text="📦 مدیریت کالا")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -51,6 +55,33 @@ def skip_kb():
     )
 
 
+def barcode_kb():
+    """کیبورد مرحله بارکد: اسکن + رد + انصراف"""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(
+                text="📷 اسکن بارکد",
+                web_app=WebAppInfo(url=f"{WEBAPP_URL.rstrip('/')}/scanner")
+            )],
+            [KeyboardButton(text="⏭ رد کردن")],
+            [KeyboardButton(text="❌ انصراف")],
+        ],
+        resize_keyboard=True
+    )
+
+
+def year_suggest_kb(current_year: int = 1405):
+    """پیشنهاد سال جاری برای تاریخ خرید"""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=str(current_year))],
+            [KeyboardButton(text="⏭ رد کردن")],
+            [KeyboardButton(text="❌ انصراف")],
+        ],
+        resize_keyboard=True
+    )
+
+
 def product_actions_kb(product_id: int, is_admin: bool = False):
     buttons = []
     if is_admin:
@@ -58,15 +89,14 @@ def product_actions_kb(product_id: int, is_admin: bool = False):
             InlineKeyboardButton(text="✏️ ویرایش", callback_data=f"edit:{product_id}"),
             InlineKeyboardButton(text="🗑 حذف", callback_data=f"del:{product_id}"),
         ])
+        buttons.append([
+            InlineKeyboardButton(text="➕ هیستوری", callback_data=f"addhist:{product_id}"),
+            InlineKeyboardButton(text="📜 نمایش هیستوری", callback_data=f"showhist:{product_id}"),
+        ])
     return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
 
 def pagination_kb(page: int, total: int, page_size: int = 10):
-    """
-    توجه: متن جستجو دیگر داخل callback_data قرار نمی‌گیرد چون تلگرام محدودیت ۶۴ بایتی
-    دارد و یک عبارت فارسی چندکلمه‌ای به‌راحتی از این حد رد می‌شود. متن جستجو در state
-    ذخیره می‌شود و اینجا فقط شماره صفحه لازم است.
-    """
     buttons = []
     nav = []
     if page > 0:
@@ -79,12 +109,6 @@ def pagination_kb(page: int, total: int, page_size: int = 10):
 
 
 def results_kb(products: list, page: int, total: int, page_size: int, nav_prefix: str = "page"):
-    """
-    نتایج جستجو به‌صورت دکمه: هر دکمه فقط نام ساخته‌شده‌ی کالا (دسته + خصوصیت‌ها + برند)
-    را نشان می‌دهد؛ با کلیک روی هر دکمه، جزئیات کامل همان کالا نمایش داده می‌شود.
-    nav_prefix باعث می‌شود بشود همین کیبورد را برای چند نوع جستجوی مختلف (متنی، فروشنده)
-    با callback_data های مجزا (page:, spage:, ...) استفاده کرد.
-    """
     buttons = []
     for p in products:
         text = p.get("name") or "بدون نام"
@@ -120,7 +144,6 @@ def confirm_delete_kb(product_id: int):
 
 
 def confirm_wipe_kb():
-    """تأیید دو مرحله‌ای برای پاک کردن کامل دیتابیس - چون این عملیات غیرقابل بازگشت است"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🧨 بله، همه چیز پاک شود", callback_data="confirm_wipe"),
@@ -130,7 +153,6 @@ def confirm_wipe_kb():
 
 
 def edit_fields_kb(product_id: int):
-    """دکمه‌های انتخاب فیلد برای ویرایش"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="دسته", callback_data=f"efield:{product_id}:category"),
@@ -150,10 +172,10 @@ def edit_fields_kb(product_id: int):
         ],
         [
             InlineKeyboardButton(text="قیمت خرید", callback_data=f"efield:{product_id}:purchase_price"),
-            InlineKeyboardButton(text="قیمت فروش", callback_data=f"efield:{product_id}:sale_price"),
+            InlineKeyboardButton(text="قیمت فروش (٪)", callback_data=f"efield:{product_id}:sale_price"),
         ],
         [
-            InlineKeyboardButton(text="قیمت عمده", callback_data=f"efield:{product_id}:wholesale_price"),
+            InlineKeyboardButton(text="قیمت عمده (٪)", callback_data=f"efield:{product_id}:wholesale_price"),
             InlineKeyboardButton(text="موجودی", callback_data=f"efield:{product_id}:stock"),
         ],
         [
@@ -161,6 +183,11 @@ def edit_fields_kb(product_id: int):
             InlineKeyboardButton(text="کد فروشنده", callback_data=f"efield:{product_id}:seller_code"),
         ],
         [
+            InlineKeyboardButton(text="روز خرید", callback_data=f"efield:{product_id}:purchase_day"),
+            InlineKeyboardButton(text="ماه خرید", callback_data=f"efield:{product_id}:purchase_month"),
+        ],
+        [
+            InlineKeyboardButton(text="سال خرید", callback_data=f"efield:{product_id}:purchase_year"),
             InlineKeyboardButton(text="🖼 عکس", callback_data=f"efield:{product_id}:photo_file_id"),
         ],
         [
@@ -170,11 +197,6 @@ def edit_fields_kb(product_id: int):
 
 
 def browse_categories_kb(categories: list, page: int = 0, page_size: int = 8):
-    """
-    دکمه‌های دسته‌ها برای مرور کالاها. چون شماره‌ی متن‌ها (فارسی) در callback_data
-    محدودیت ۶۴ بایتی تلگرام را به‌راحتی رد می‌کند، به‌جای متن دسته فقط ایندکسش در
-    لیستی که در state ذخیره شده پاس داده می‌شود.
-    """
     start = page * page_size
     chunk = list(enumerate(categories))[start:start + page_size]
     buttons = []

@@ -1,11 +1,5 @@
 """
-اسکریپت یک‌بار اجرا برای ایمپورت *اولیه* اکسل به دیتابیس (قبل از این‌که هیچ کالایی
-در ربات ثبت شده باشد).
-
-⚠️ توجه: این اسکریپت عمداً مخرب است و همه‌ی جدول را پاک می‌کند (چون قرار است فقط یک بار
-و روی دیتابیس خالی اجرا شود). برای ایمپورت‌های بعدی که ممکن است بارکد/موجودی دستی ثبت‌شده
-داشته باشند، از گزینه‌ی «📥 ایمپورت اکسل» داخل خود ربات استفاده کنید که به‌جای پاک کردن،
-کالاهای موجود را merge/به‌روزرسانی می‌کند و بارکد و موجودی قبلی را حفظ می‌کند.
+اسکریپت یک‌بار اجرا برای ایمپورت *اولیه* اکسل به دیتابیس.
 """
 import asyncio
 import openpyxl
@@ -21,10 +15,18 @@ async def main():
     wb = openpyxl.load_workbook(EXCEL_PATH)
     ws = wb.active
 
-    # هدر در ردیف ۲ است (بر اساس بررسی قبلی)
-    header_row = 2
+    header_row = None
+    for row in range(1, 6):
+        vals = [ws.cell(row, c).value for c in range(1, 20)]
+        if any(v and "دسته" in str(v) for v in vals):
+            header_row = row
+            break
+    if not header_row:
+        # fallback: row 1 from the preview
+        header_row = 1
+
     col_map = {}
-    for c in range(1, 20):
+    for c in range(1, 25):
         val = ws.cell(header_row, c).value
         if not val:
             continue
@@ -33,21 +35,21 @@ async def main():
             col_map["excel_id"] = c
         elif "دسته" in v:
             col_map["category"] = c
-        elif "خصوصیت 1" in v:
+        elif "خصوصیت 1" in v or "خصوصیت۱" in v:
             col_map["attr1"] = c
-        elif "خصوصیت 2" in v:
+        elif "خصوصیت 2" in v or "خصوصیت۲" in v:
             col_map["attr2"] = c
-        elif "خصوصیت 3" in v:
+        elif "خصوصیت 3" in v or "خصوصیت۳" in v:
             col_map["attr3"] = c
-        elif "خصوصیت 4" in v:
+        elif "خصوصیت 4" in v or "خصوصیت۴" in v:
             col_map["attr4"] = c
-        elif "خصوصیت 5" in v:
+        elif "خصوصیت 5" in v or "خصوصیت۵" in v:
             col_map["attr5"] = c
         elif "برند" in v:
             col_map["brand"] = c
         elif "قیمت خرید" in v:
             col_map["purchase_price"] = c
-        elif "فروش واحد تک" in v:
+        elif "فروش واحد تک" in v or "قیمت فروش واحد تک" in v:
             col_map["sale_price"] = c
         elif "عمده" in v:
             col_map["wholesale_price"] = c
@@ -55,12 +57,20 @@ async def main():
             col_map["seller_name"] = c
         elif "کد فروشنده" in v:
             col_map["seller_code"] = c
+        elif "بارکد" in v:
+            col_map["barcode"] = c
+        elif "تاریخ خرید - روز" in v or (v == "تاریخ خرید - روز"):
+            col_map["purchase_day"] = c
+        elif "تاریخ خرید - ماه" in v:
+            col_map["purchase_month"] = c
+        elif "تاریخ خرید - سال" in v:
+            col_map["purchase_year"] = c
 
     print("Column map:", col_map)
 
     count = 0
     for row in range(header_row + 1, ws.max_row + 1):
-        cat = ws.cell(row, col_map.get("category", 3)).value
+        cat = ws.cell(row, col_map.get("category", 2)).value
         if not cat or not str(cat).strip():
             continue
 
@@ -82,7 +92,17 @@ async def main():
             except Exception:
                 return 0
 
+        def get_int(key):
+            v = get(key)
+            if v is None:
+                return None
+            try:
+                return int(float(v))
+            except Exception:
+                return None
+
         excel_id_val = get("excel_id")
+        barcode_val = get("barcode")
         data = {
             "excel_id": str(excel_id_val).strip() if excel_id_val is not None else None,
             "category": str(get("category")).strip() if get("category") else None,
@@ -96,10 +116,15 @@ async def main():
             "sale_price": get_num("sale_price"),
             "wholesale_price": get_num("wholesale_price"),
             "stock": 0,
-            "barcode": None,
+            "barcode": str(barcode_val).strip() if barcode_val is not None else None,
             "seller_name": str(get("seller_name")).strip() if get("seller_name") else None,
             "seller_code": str(get("seller_code")).strip() if get("seller_code") else None,
             "photo_file_id": None,
+            "purchase_day": get_int("purchase_day"),
+            "purchase_month": get_int("purchase_month"),
+            "purchase_year": get_int("purchase_year"),
+            "sale_percent": None,
+            "wholesale_percent": None,
         }
         await add_product(data)
         count += 1

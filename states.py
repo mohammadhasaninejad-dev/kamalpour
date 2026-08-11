@@ -14,12 +14,15 @@ class AddProduct(StatesGroup):
     attr5 = State()
     brand = State()
     purchase_price = State()
-    sale_price = State()
-    wholesale_price = State()
+    sale_price = State()          # درصد سود فروش
+    wholesale_price = State()     # درصد سود عمده
     stock = State()
     barcode = State()
     seller_name = State()
     seller_code = State()
+    purchase_day = State()
+    purchase_month = State()
+    purchase_year = State()
     photo = State()
 
 
@@ -39,3 +42,10 @@ class ImportExcel(StatesGroup):
 
 class SellerSearch(StatesGroup):
     waiting_name = State()
+
+
+class AddHistory(StatesGroup):
+    day = State()
+    month = State()
+    year = State()
+    price = State()
