@@ -20,7 +20,7 @@ from database import (
     get_distinct_categories, get_distinct_attr1,
     get_products_by_category_attr1, count_products_by_category_attr1,
     get_all_products_full, search_by_seller, count_by_seller,
-    add_price_history, get_price_history
+    add_price_history, get_price_history, ensure_initial_history
 )
 from utils import is_admin, format_product, format_price, parse_number, parse_int, format_date
 from config import PAGE_SIZE
@@ -464,6 +464,11 @@ async def edit_field_chosen(callback: CallbackQuery, state: FSMContext):
             f"🖼 عکس جدید برای «{fa_name}» را ارسال کنید:",
             reply_markup=cancel_kb()
         )
+    elif field == "barcode":
+        await callback.message.answer(
+            "بارکد جدید را تایپ کنید یا با دکمه زیر اسکن کنید:",
+            reply_markup=barcode_kb()
+        )
     elif field == "sale_price":
         await callback.message.answer(
             "درصد سود فروش جدید را وارد کنید (مثلاً ۳۰):",
@@ -492,6 +497,35 @@ async def edit_field_chosen(callback: CallbackQuery, state: FSMContext):
 async def edit_value_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
+
+
+@router.message(EditProduct.value, F.content_type == ContentType.WEB_APP_DATA)
+async def edit_barcode_scan(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("edit_field") != "barcode":
+        await message.answer("الان منتظر ورودی دیگری هستم.")
+        return
+    pid = data["edit_id"]
+    product = await get_product(pid)
+    if not product:
+        await state.clear()
+        await message.answer("کالا پیدا نشد.", reply_markup=admin_menu())
+        return
+    barcode = (message.web_app_data.data or "").strip()
+    product["barcode"] = barcode or None
+    await update_product(pid, product)
+    await state.clear()
+    updated = await get_product(pid)
+    await message.answer(
+        f"✅ بارکد به‌روز شد: <code>{barcode or '—'}</code>",
+        parse_mode="HTML",
+        reply_markup=admin_menu()
+    )
+    await message.answer(
+        format_product(updated),
+        parse_mode="HTML",
+        reply_markup=product_actions_kb(pid, True)
+    )
 
 
 @router.message(EditProduct.value, F.photo)
@@ -575,6 +609,11 @@ async def edit_value(message: Message, state: FSMContext):
             return
         product[field] = val
 
+    elif field == "barcode":
+        if text == "⏭ رد کردن":
+            product["barcode"] = None
+        else:
+            product["barcode"] = text
     else:
         product[field] = text
 
@@ -1240,6 +1279,11 @@ async def import_excel(message: Message, state: FSMContext):
                 if data["purchase_year"] is None:
                     data["purchase_year"] = existing.get("purchase_year")
                 await update_product(existing["id"], data)
+                await ensure_initial_history(
+                    existing["id"],
+                    data.get("purchase_day"), data.get("purchase_month"),
+                    data.get("purchase_year"), data.get("purchase_price")
+                )
                 updated += 1
             else:
                 data["barcode"] = str(excel_barcode).strip() if excel_barcode is not None else None
@@ -1247,7 +1291,8 @@ async def import_excel(message: Message, state: FSMContext):
                 data["photo_file_id"] = None
                 data["sale_percent"] = None
                 data["wholesale_percent"] = None
-                await add_product(data)
+                new_id = await add_product(data)
+                # add_product خودش هیستوری می‌سازد اگر تاریخ+قیمت باشد
                 added += 1
 
         await state.clear()

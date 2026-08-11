@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ContentType
 from aiogram.fsm.context import FSMContext
 
-from states import TextSearch, AddProduct
+from states import TextSearch, AddProduct, EditProduct
 from keyboards import main_menu, results_kb, product_actions_kb, cancel_kb
 from database import search_products, count_search, get_product_by_barcode, get_product
 from utils import is_admin, format_product
@@ -104,23 +104,47 @@ async def webapp_data_handler(message: Message, state: FSMContext):
     در غیر این صورت استعلام بارکد انجام می‌شود.
     """
     current = await state.get_state()
-    if current and current.startswith("AddProduct"):
-        # بگذار admin هندلر آن را مدیریت کند — با propagate
-        # چون state-filter در admin دقیق‌تر است، اینجا فقط رد می‌شویم اگر در AddProduct باشیم
-        # اما aiogram فقط یک هندلر را صدا می‌زند؛ پس باید خودمان منطق افزودن را اینجا هم پشتیبانی کنیم
-        # یا state را چک کنیم و داده را برای admin بگذاریم.
-        # ساده‌ترین راه: اگر در AddProduct.barcode هستیم، بارکد را ست کنیم.
-        if current == AddProduct.barcode.state:
+    # افزودن کالا — مرحله بارکد
+    if current == AddProduct.barcode.state:
+        barcode = (message.web_app_data.data or "").strip()
+        await state.update_data(barcode=barcode or None)
+        await state.set_state(AddProduct.seller_name)
+        from keyboards import skip_kb
+        await message.answer(
+            f"بارکد اسکن‌شده: <code>{barcode or '—'}</code>\nنام فروشنده:",
+            parse_mode="HTML",
+            reply_markup=skip_kb()
+        )
+        return
+
+    # ویرایش بارکد
+    if current == EditProduct.value.state:
+        data = await state.get_data()
+        if data.get("edit_field") == "barcode":
+            from database import update_product
+            from keyboards import admin_menu, product_actions_kb
+            pid = data["edit_id"]
+            product = await get_product(pid)
+            if not product:
+                await state.clear()
+                await message.answer("کالا پیدا نشد.", reply_markup=main_menu(is_admin(message.from_user)))
+                return
             barcode = (message.web_app_data.data or "").strip()
-            await state.update_data(barcode=barcode or None)
-            await state.set_state(AddProduct.seller_name)
+            product["barcode"] = barcode or None
+            await update_product(pid, product)
+            await state.clear()
+            updated = await get_product(pid)
             await message.answer(
-                f"بارکد اسکن‌شده: <code>{barcode or '—'}</code>\nنام فروشنده:",
+                f"✅ بارکد به‌روز شد: <code>{barcode or '—'}</code>",
                 parse_mode="HTML",
-                reply_markup=__import__("keyboards", fromlist=["skip_kb"]).skip_kb()
+                reply_markup=admin_menu()
+            )
+            await message.answer(
+                format_product(updated),
+                parse_mode="HTML",
+                reply_markup=product_actions_kb(pid, True)
             )
             return
-        return
 
     data = message.web_app_data.data
     barcode = data.strip() if data else ""
