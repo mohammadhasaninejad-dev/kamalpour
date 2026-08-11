@@ -77,6 +77,9 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_history_product ON price_history(product_id)")
         await db.commit()
 
+    # پر کردن هیستوری برای کالاهای قدیمی که تاریخ/قیمت دارند
+    await backfill_missing_history()
+
 
 def build_product_name(category, attr1, attr2, attr3, attr4, attr5, brand, seller_name=None):
     """
@@ -289,6 +292,62 @@ async def add_price_history(product_id: int, day: int, month: int, year: int, pr
             """, (purchase, sale, wholesale, day, month, year, product_id))
 
         await db.commit()
+
+
+
+async def ensure_initial_history(product_id: int, day, month, year, price):
+    """اگر هیستوری‌ای برای کالا نباشد و قیمت/تاریخ داشته باشد، اولین رکورد را می‌سازد."""
+    if not price or not year:
+        return
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM price_history WHERE product_id=?", (product_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0] > 0:
+                return
+        try:
+            d = int(day) if day else 1
+            m = int(month) if month else 1
+            y = int(year)
+            p = float(price)
+        except Exception:
+            return
+        await db.execute("""
+            INSERT INTO price_history (product_id, day, month, year, price)
+            VALUES (?, ?, ?, ?, ?)
+        """, (product_id, d, m, y, p))
+        await db.commit()
+
+
+async def backfill_missing_history():
+    """برای کالاهایی که تاریخ/قیمت دارند ولی هیستوری ندارند، اولین رکورد را بساز."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT p.id, p.purchase_day, p.purchase_month, p.purchase_year, p.purchase_price
+            FROM products p
+            WHERE p.purchase_price IS NOT NULL AND p.purchase_price > 0
+              AND p.purchase_year IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM price_history h WHERE h.product_id = p.id
+              )
+        """) as cursor:
+            rows = await cursor.fetchall()
+        for r in rows:
+            day = r["purchase_day"] or 1
+            month = r["purchase_month"] or 1
+            year = r["purchase_year"]
+            price = r["purchase_price"]
+            try:
+                await db.execute("""
+                    INSERT INTO price_history (product_id, day, month, year, price)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (r["id"], int(day), int(month), int(year), float(price)))
+            except Exception:
+                pass
+        await db.commit()
+        return len(rows)
 
 
 async def get_price_history(product_id: int):
