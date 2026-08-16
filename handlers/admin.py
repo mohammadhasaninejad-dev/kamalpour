@@ -6,12 +6,12 @@ import tempfile
 import os
 import inspect
 
-from states import AddProduct, EditProduct, DeleteProduct, ImportExcel, SellerSearch, AddHistory
+from states import AddProduct, EditProduct, DeleteProduct, ImportExcel, SellerSearch, AddHistory, IdSearch, EditHistory
 from keyboards import (
     admin_menu, main_menu, cancel_kb, skip_kb, barcode_kb, year_suggest_kb,
     confirm_delete_kb, product_actions_kb, edit_fields_kb,
     confirm_wipe_kb, browse_categories_kb, browse_attrs_kb, browse_products_nav_kb,
-    results_kb, list_products_menu_kb
+    results_kb, list_products_menu_kb, history_item_kb, confirm_delete_history_kb
 )
 from database import (
     add_product, update_product, delete_product, get_product,
@@ -20,7 +20,9 @@ from database import (
     get_distinct_categories, get_distinct_attr1,
     get_products_by_category_attr1, count_products_by_category_attr1,
     get_all_products_full, search_by_seller, count_by_seller,
-    add_price_history, get_price_history, ensure_initial_history
+    add_price_history, get_price_history, ensure_initial_history,
+    get_history_item, update_price_history, delete_price_history,
+    sync_product_from_latest_history, normalize_digits
 )
 from utils import is_admin, format_product, format_price, parse_number, parse_int, format_date
 from config import PAGE_SIZE
@@ -404,7 +406,7 @@ async def edit_cancel(message: Message, state: FSMContext):
 
 @router.message(EditProduct.waiting_id)
 async def edit_id(message: Message, state: FSMContext):
-    excel_id = message.text.strip()
+    excel_id = normalize_digits(message.text.strip())
     if not excel_id:
         await message.answer("شناسه را وارد کنید.")
         return
@@ -710,8 +712,8 @@ async def hist_price(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("showhist:"))
-@admin_only
 async def show_history(callback: CallbackQuery):
+    """نمایش هیستوری برای همه؛ دکمه‌های ویرایش/حذف فقط برای ادمین"""
     pid = int(callback.data.split(":")[1])
     product = await get_product(pid)
     if not product:
@@ -726,13 +728,200 @@ async def show_history(callback: CallbackQuery):
         await callback.answer()
         return
 
-    lines = [f"📜 هیستوری قیمت خرید — <b>{product.get('name') or '—'}</b>\n"]
+    admin = is_admin(callback.from_user)
+    await callback.message.answer(
+        f"📜 هیستوری قیمت خرید — <b>{product.get('name') or '—'}</b>",
+        parse_mode="HTML"
+    )
     for h in history:
-        lines.append(
-            f"📅 {h['day']}/{h['month']}/{h['year']} — {format_price(h['price'])}"
-        )
-    await callback.message.answer("\n".join(lines), parse_mode="HTML")
+        line = f"📅 {h['day']}/{h['month']}/{h['year']} — {format_price(h['price'])}"
+        kb = history_item_kb(h["id"], pid, admin)
+        await callback.message.answer(line, reply_markup=kb)
     await callback.answer()
+
+
+# ---------- ویرایش هیستوری ----------
+@router.callback_query(F.data.startswith("edithist:"))
+@admin_only
+async def edit_history_start(callback: CallbackQuery, state: FSMContext):
+    hid = int(callback.data.split(":")[1])
+    item = await get_history_item(hid)
+    if not item:
+        await callback.answer("رکورد پیدا نشد", show_alert=True)
+        return
+    await state.update_data(
+        edit_hist_id=hid,
+        edit_hist_product_id=item["product_id"],
+    )
+    await state.set_state(EditHistory.day)
+    await callback.message.answer(
+        f"ویرایش هیستوری فعلی: {item['day']}/{item['month']}/{item['year']} — {format_price(item['price'])}\n\n"
+        "روز جدید را وارد کنید (۱–۳۱):",
+        reply_markup=cancel_kb()
+    )
+    await callback.answer()
+
+
+@router.message(EditHistory.day, F.text == "❌ انصراف")
+@router.message(EditHistory.month, F.text == "❌ انصراف")
+@router.message(EditHistory.year, F.text == "❌ انصراف")
+@router.message(EditHistory.price, F.text == "❌ انصراف")
+async def edit_hist_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
+
+
+@router.message(EditHistory.day)
+async def edit_hist_day(message: Message, state: FSMContext):
+    val = parse_int(message.text)
+    if val is None or val < 1 or val > 31:
+        await message.answer("روز معتبر (۱–۳۱) وارد کنید.")
+        return
+    await state.update_data(edit_hist_day=val)
+    await state.set_state(EditHistory.month)
+    await message.answer("ماه جدید (۱–۱۲):", reply_markup=cancel_kb())
+
+
+@router.message(EditHistory.month)
+async def edit_hist_month(message: Message, state: FSMContext):
+    val = parse_int(message.text)
+    if val is None or val < 1 or val > 12:
+        await message.answer("ماه معتبر (۱–۱۲) وارد کنید.")
+        return
+    await state.update_data(edit_hist_month=val)
+    await state.set_state(EditHistory.year)
+    await message.answer(
+        f"سال جدید (پیشنهاد: {CURRENT_YEAR}):",
+        reply_markup=year_suggest_kb(CURRENT_YEAR)
+    )
+
+
+@router.message(EditHistory.year)
+async def edit_hist_year(message: Message, state: FSMContext):
+    val = parse_int(message.text)
+    if val is None or val < 1300 or val > 1500:
+        await message.answer("سال معتبر وارد کنید.")
+        return
+    await state.update_data(edit_hist_year=val)
+    await state.set_state(EditHistory.price)
+    await message.answer("قیمت خرید جدید (تومان):", reply_markup=cancel_kb())
+
+
+@router.message(EditHistory.price)
+async def edit_hist_price(message: Message, state: FSMContext):
+    price = parse_number(message.text)
+    if price is None or price < 0:
+        await message.answer("قیمت معتبر وارد کنید.")
+        return
+    data = await state.get_data()
+    hid = data["edit_hist_id"]
+    pid = data["edit_hist_product_id"]
+    day = data["edit_hist_day"]
+    month = data["edit_hist_month"]
+    year = data["edit_hist_year"]
+
+    await update_price_history(hid, day, month, year, price)
+    await sync_product_from_latest_history(pid)
+    await state.clear()
+
+    product = await get_product(pid)
+    await message.answer(
+        f"✅ هیستوری ویرایش شد: {day}/{month}/{year} — {format_price(price)}\n"
+        "قیمت کالا بر اساس جدیدترین هیستوری به‌روز شد.",
+        reply_markup=admin_menu()
+    )
+    if product:
+        await message.answer(
+            format_product(product),
+            parse_mode="HTML",
+            reply_markup=product_actions_kb(pid, True)
+        )
+
+
+# ---------- حذف هیستوری ----------
+@router.callback_query(F.data.startswith("delhist:"))
+@admin_only
+async def delete_history_ask(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    hid = int(parts[1])
+    pid = int(parts[2])
+    item = await get_history_item(hid)
+    if not item:
+        await callback.answer("رکورد پیدا نشد", show_alert=True)
+        return
+    await callback.message.answer(
+        f"حذف این رکورد هیستوری؟\n📅 {item['day']}/{item['month']}/{item['year']} — {format_price(item['price'])}",
+        reply_markup=confirm_delete_history_kb(hid, pid)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_delhist:"))
+@admin_only
+async def confirm_delete_history(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    hid = int(parts[1])
+    pid = int(parts[2])
+    await delete_price_history(hid)
+    await sync_product_from_latest_history(pid)
+    product = await get_product(pid)
+    await callback.message.edit_text("✅ رکورد هیستوری حذف شد. قیمت کالا در صورت نیاز به‌روز شد.")
+    if product:
+        await callback.message.answer(
+            format_product(product),
+            parse_mode="HTML",
+            reply_markup=product_actions_kb(pid, True)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_delhist")
+async def cancel_delete_history(callback: CallbackQuery):
+    await callback.message.edit_text("حذف هیستوری لغو شد.")
+    await callback.answer()
+
+
+# ---------- جستجو بر اساس شناسه ----------
+@router.message(F.text == "🔎 جستجو بر اساس شناسه")
+@admin_only
+async def id_search_start(message: Message, state: FSMContext):
+    await state.set_state(IdSearch.waiting_id)
+    await message.answer(
+        "شناسه کالا (ستون شناسه اکسل) را وارد کنید:\n"
+        "ارقام فارسی و انگلیسی هر دو پذیرفته می‌شوند.",
+        reply_markup=cancel_kb()
+    )
+
+
+@router.message(IdSearch.waiting_id, F.text == "❌ انصراف")
+async def id_search_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("لغو شد.", reply_markup=main_menu(is_admin(message.from_user)))
+
+
+@router.message(IdSearch.waiting_id)
+async def id_search_query(message: Message, state: FSMContext):
+    excel_id = normalize_digits(message.text.strip())
+    if not excel_id:
+        await message.answer("شناسه را وارد کنید.")
+        return
+    product = await get_product_by_excel_id(excel_id)
+    if not product:
+        await message.answer(
+            f"❌ کالایی با شناسه <code>{excel_id}</code> پیدا نشد.",
+            parse_mode="HTML",
+            reply_markup=cancel_kb()
+        )
+        return
+    await state.clear()
+    admin = is_admin(message.from_user)
+    text = format_product(product)
+    kb = product_actions_kb(product["id"], admin)
+    if product.get("photo_file_id"):
+        await message.answer_photo(product["photo_file_id"], caption=text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await message.answer("منوی مدیریت:", reply_markup=admin_menu())
 
 
 # ---------- حذف کالا ----------
@@ -751,7 +940,7 @@ async def delete_cancel(message: Message, state: FSMContext):
 
 @router.message(DeleteProduct.waiting_id)
 async def delete_id(message: Message, state: FSMContext):
-    excel_id = message.text.strip()
+    excel_id = normalize_digits(message.text.strip())
     if not excel_id:
         await message.answer("شناسه را وارد کنید.")
         return
