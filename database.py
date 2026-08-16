@@ -362,6 +362,82 @@ async def get_price_history(product_id: int):
             return [dict(r) for r in rows]
 
 
+async def get_history_item(history_id: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM price_history WHERE id=?", (history_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def update_price_history(history_id: int, day: int, month: int, year: int, price: float):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            UPDATE price_history SET day=?, month=?, year=?, price=?
+            WHERE id=?
+        """, (day, month, year, price, history_id))
+        await db.commit()
+
+
+async def delete_price_history(history_id: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM price_history WHERE id=?", (history_id,))
+        await db.commit()
+
+
+async def sync_product_from_latest_history(product_id: int):
+    """
+    بعد از ویرایش/حذف هیستوری: قیمت خرید و تاریخ کالا را از جدیدترین
+    رکورد هیستوری می‌گیرد و فروش/عمده را با درصدهای ذخیره‌شده محاسبه می‌کند.
+    اگر هیستوری نمانده باشد، قیمت‌ها را دست نمی‌زند (فقط تاریخ را خالی نمی‌کند اجباری).
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT * FROM price_history
+            WHERE product_id=?
+            ORDER BY year DESC, month DESC, day DESC, id DESC
+            LIMIT 1
+        """, (product_id,)) as cursor:
+            latest = await cursor.fetchone()
+
+        async with db.execute("SELECT * FROM products WHERE id=?", (product_id,)) as cursor:
+            prow = await cursor.fetchone()
+        if not prow:
+            return
+        product = dict(prow)
+
+        if not latest:
+            return
+
+        purchase = float(latest["price"])
+        day, month, year = latest["day"], latest["month"], latest["year"]
+        sale = product.get("sale_price") or 0
+        wholesale = product.get("wholesale_price") or 0
+        sale_percent = product.get("sale_percent")
+        wholesale_percent = product.get("wholesale_percent")
+        if sale_percent is not None:
+            try:
+                sale = purchase * (1 + float(sale_percent) / 100.0)
+            except Exception:
+                pass
+        if wholesale_percent is not None:
+            try:
+                wholesale = purchase * (1 + float(wholesale_percent) / 100.0)
+            except Exception:
+                pass
+
+        await db.execute("""
+            UPDATE products SET
+                purchase_price=?, sale_price=?, wholesale_price=?,
+                purchase_day=?, purchase_month=?, purchase_year=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+        """, (purchase, sale, wholesale, day, month, year, product_id))
+        await db.commit()
+
+
+
 FA_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 AR_DIGITS = "٠١٢٣٤٥٦٧٨٩"
 EN_DIGITS = "0123456789"

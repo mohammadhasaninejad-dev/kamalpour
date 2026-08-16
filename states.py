@@ -14,8 +14,8 @@ class AddProduct(StatesGroup):
     attr5 = State()
     brand = State()
     purchase_price = State()
-    sale_price = State()          # درصد سود فروش
-    wholesale_price = State()     # درصد سود عمده
+    sale_price = State()
+    wholesale_price = State()
     stock = State()
     barcode = State()
     seller_name = State()
@@ -44,7 +44,18 @@ class SellerSearch(StatesGroup):
     waiting_name = State()
 
 
+class IdSearch(StatesGroup):
+    waiting_id = State()
+
+
 class AddHistory(StatesGroup):
+    day = State()
+    month = State()
+    year = State()
+    price = State()
+
+
+class EditHistory(StatesGroup):
     day = State()
     month = State()
     year = State()

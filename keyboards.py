@@ -29,7 +29,8 @@ def admin_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ افزودن کالا"), KeyboardButton(text="✏️ ویرایش کالا")],
-            [KeyboardButton(text="🗑 حذف کالا"), KeyboardButton(text="📋 لیست کالاها")],
+            [KeyboardButton(text="🗑 حذف کالا"), KeyboardButton(text="🔎 جستجو بر اساس شناسه")],
+            [KeyboardButton(text="📋 لیست کالاها")],
             [KeyboardButton(text="📥 ایمپورت اکسل"), KeyboardButton(text="📤 خروجی اکسل")],
             [KeyboardButton(text="🧨 پاک کردن کامل دیتابیس")],
             [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
@@ -56,7 +57,6 @@ def skip_kb():
 
 
 def barcode_kb():
-    """کیبورد مرحله بارکد: اسکن + رد + انصراف"""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(
@@ -71,7 +71,6 @@ def barcode_kb():
 
 
 def year_suggest_kb(current_year: int = 1405):
-    """پیشنهاد سال جاری برای تاریخ خرید"""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=str(current_year))],
@@ -84,16 +83,40 @@ def year_suggest_kb(current_year: int = 1405):
 
 def product_actions_kb(product_id: int, is_admin: bool = False):
     buttons = []
+    # همه می‌توانند هیستوری را ببینند
+    buttons.append([
+        InlineKeyboardButton(text="📜 نمایش هیستوری", callback_data=f"showhist:{product_id}"),
+    ])
     if is_admin:
-        buttons.append([
+        buttons.insert(0, [
             InlineKeyboardButton(text="✏️ ویرایش", callback_data=f"edit:{product_id}"),
             InlineKeyboardButton(text="🗑 حذف", callback_data=f"del:{product_id}"),
         ])
         buttons.append([
             InlineKeyboardButton(text="➕ هیستوری", callback_data=f"addhist:{product_id}"),
-            InlineKeyboardButton(text="📜 نمایش هیستوری", callback_data=f"showhist:{product_id}"),
         ])
-    return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def history_item_kb(history_id: int, product_id: int, is_admin: bool = False):
+    """دکمه‌های ویرایش/حذف برای یک رکورد هیستوری"""
+    if not is_admin:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✏️", callback_data=f"edithist:{history_id}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"delhist:{history_id}:{product_id}"),
+        ]
+    ])
+
+
+def confirm_delete_history_kb(history_id: int, product_id: int):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ بله، حذف شود", callback_data=f"confirm_delhist:{history_id}:{product_id}"),
+            InlineKeyboardButton(text="❌ خیر", callback_data="cancel_delhist"),
+        ]
+    ])
 
 
 def pagination_kb(page: int, total: int, page_size: int = 10):
